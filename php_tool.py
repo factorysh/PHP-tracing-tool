@@ -96,8 +96,10 @@ TRACEPOINT_PROBE(syscalls, sys_exit_SYSCALL) {
     data.pid = pid;
     depth = entry.lookup_or_init(&data.pid, &zero);
     data.depth = *depth;
-    char str[80] = "SYSCALL";
-    bpf_probe_read_str(&data.method, sizeof(data.method), str);
+    char method_str[80] = "SYSCALL";
+    bpf_probe_read_str(&data.method, sizeof(data.method), method_str);
+    char class_str[80] = "sys";
+    bpf_probe_read_str(&data.clazz, sizeof(data.clazz), class_str);
     calls.perf_submit(args, &data, sizeof(data));
     return 0;
 }
