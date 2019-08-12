@@ -1,0 +1,78 @@
+#!/usr/bin/env bpftrace
+
+BEGIN
+{
+    printf("PHP observe tool. Hit Ctrl-C to end.\n");
+    printf("%-8s %-8s %-16s %-42s %s\n", "TIME", "PID", "COMM", "FUNC", "LATMS");
+}
+
+tracepoint:syscalls:sys_exit_socket,
+tracepoint:syscalls:sys_enter_socketpair,
+tracepoint:syscalls:sys_enter_bind,
+tracepoint:syscalls:sys_enter_listen,
+tracepoint:syscalls:sys_enter_accept4,
+tracepoint:syscalls:sys_enter_accept,
+tracepoint:syscalls:sys_enter_connect,
+tracepoint:syscalls:sys_enter_getsockname,
+tracepoint:syscalls:sys_enter_getpeername,
+tracepoint:syscalls:sys_enter_sendto,
+tracepoint:syscalls:sys_enter_recvfrom,
+tracepoint:syscalls:sys_enter_setsockopt,
+tracepoint:syscalls:sys_enter_getsockopt,
+tracepoint:syscalls:sys_enter_shutdown,
+tracepoint:syscalls:sys_enter_sendmsg,
+tracepoint:syscalls:sys_enter_sendmmsg,
+tracepoint:syscalls:sys_enter_recvmsg,
+tracepoint:syscalls:sys_enter_recvmmsg,
+tracepoint:syscalls:sys_enter_read,
+tracepoint:syscalls:sys_enter_write,
+tracepoint:syscalls:sys_enter_sendfile64
+/ pid == 31325 /
+{
+    @syslat[0] = nsecs;
+}
+
+tracepoint:syscalls:sys_exit_socket,
+tracepoint:syscalls:sys_exit_socketpair,
+tracepoint:syscalls:sys_exit_bind,
+tracepoint:syscalls:sys_exit_listen,
+tracepoint:syscalls:sys_exit_accept4,
+tracepoint:syscalls:sys_exit_accept,
+tracepoint:syscalls:sys_exit_connect,
+tracepoint:syscalls:sys_exit_getsockname,
+tracepoint:syscalls:sys_exit_getpeername,
+tracepoint:syscalls:sys_exit_sendto,
+tracepoint:syscalls:sys_exit_recvfrom,
+tracepoint:syscalls:sys_exit_setsockopt,
+tracepoint:syscalls:sys_exit_getsockopt,
+tracepoint:syscalls:sys_exit_shutdown,
+tracepoint:syscalls:sys_exit_sendmsg,
+tracepoint:syscalls:sys_exit_sendmmsg,
+tracepoint:syscalls:sys_exit_recvmsg,
+tracepoint:syscalls:sys_exit_recvmmsg,
+tracepoint:syscalls:sys_exit_read,
+tracepoint:syscalls:sys_exit_write,
+tracepoint:syscalls:sys_exit_sendfile64
+/ pid == 31325 /
+{
+    $lat = (nsecs - @syslat[0]);
+    time("%H:%M:%S ");
+    printf("%-8d %-18s %-42s %d.ns\n", pid, comm, probe, $lat);
+    delete(@syslat[0]);
+}
+
+usdt::function__entry
+{
+    @start[tid] = nsecs;
+    time("%H:%M:%S ");
+    printf("%-8d %-16s %s->%-42s\n", pid, comm, str(arg3), str(arg0));
+}
+
+usdt::function__return
+/ @start[tid] /
+{
+    $latms = (nsecs - @start[tid]) / 1000000;
+    time("%H:%M:%S ");
+    printf("%-8d %-16s %s->%-42s %d.ms\n", pid, comm, str(arg3), str(arg0), $latms);
+    delete(@start[tid]);
+}
