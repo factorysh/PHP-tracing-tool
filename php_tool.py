@@ -7,6 +7,7 @@ import ctypes as ct
 import time
 import os
 
+# colors for printing
 class c:
     BLUE = '\033[95m'
     OKBLUE = '\033[94m'
@@ -17,28 +18,24 @@ class c:
     BOLD = '\033[1m'
     UNDERLINE = '\033[4m'
 
-# Recuperer le pid en argument
+# get the pid in arg
 parser = argparse.ArgumentParser(
     description="php_tool",
     formatter_class=argparse.RawDescriptionHelpFormatter)
 parser.add_argument("pid", type=int, nargs="+", help="process id to attach to")
-parser.add_argument("-M", "--method",
-    help="trace only calls to methods starting with this prefix")
-parser.add_argument("-C", "--class", dest="clazz",
-    help="trace only calls to classes starting with this prefix")
 args = parser.parse_args()
 
-
-# Debut du programme
+# program template
 program = """
 struct call_t {
-    u64 depth;                  // first bit is direction (0 entry, 1 return)
-    u64 pid;                    // (tgid << 32) + pid from bpf_get_current...
-    u64 lat;
-    u64 type;
-    char clazz[80];
-    char method[80];
-    char file[80];
+    u64     depth;                  // first bit is direction (0 entry, 1 return)
+    u64     pid;                    // (tgid << 32) + pid from bpf_get_current...
+    u64     lat;                    // time latency
+    u64     type;                   // syscall or php function
+    char    clazz[80];              // class name
+    char    method[80];             // method name
+    char    file[80];               // php file name
+    long    sys_ret;                // syscall function return
 };
 
 #define SYS 1
@@ -48,10 +45,9 @@ BPF_PERF_OUTPUT(calls);
 BPF_HASH(entry, u64, u64);
 BPF_HASH(start, u64, u64);
 BPF_HASH(start_func, u64, u64);
-BPF_HASH(dis_sys, u64, u64);
 """
 
-# template pour tracer un probe
+# php probes template
 php_trace_template = """
 int NAME(struct pt_regs *ctx) {
     u64 *depth, zero = 0, clazz = 0, method = 0, file = 0;
@@ -63,7 +59,6 @@ int NAME(struct pt_regs *ctx) {
     READ_FILE
     bpf_probe_read(&data.clazz, sizeof(data.clazz), (void *)clazz);
     bpf_probe_read(&data.method, sizeof(data.method), (void *)method);
-
     bpf_probe_read(&data.file, sizeof(data.file), (void *)file);
 
     #ifndef IS_RETURN
@@ -75,8 +70,9 @@ int NAME(struct pt_regs *ctx) {
     #ifdef IS_RETURN
 
     u64 *start_ns = start_func.lookup(&method);
-    if (!start_ns)
+    if (!start_ns) {
         return 0;
+    }
     data.lat = bpf_ktime_get_ns() - *start_ns;
     start_func.delete(&method);
 
@@ -93,13 +89,13 @@ int NAME(struct pt_regs *ctx) {
 }
 """
 
+# syscall tracepoint template
 sys_trace_template = """
 TRACEPOINT_PROBE(syscalls, sys_enter_SYSCALL) {
     u64 pid = bpf_get_current_pid_tgid();
-    if (PID_CONDITION)
+    if (PID_CONDITION) {
         return 0;
-    //if (pid >> 32 != PID)
-    //    return 0;
+    }
     u64 time = bpf_ktime_get_ns();
     start.update(&pid, &time);
     return 0;
@@ -107,18 +103,21 @@ TRACEPOINT_PROBE(syscalls, sys_enter_SYSCALL) {
 
 TRACEPOINT_PROBE(syscalls, sys_exit_SYSCALL) {
     u64 pid = bpf_get_current_pid_tgid();
-    if (PID_CONDITION)
+    if (PID_CONDITION) {
         return 0;
-    //if (pid >> 32 != PID)
-    //    return 0;
-    u64 *depth, zero = 0, clazz = 0, method = 0 ;
+    }
+
+    u64 *depth, zero = 0, clazz = 0, method = 0;
     u64 *start_ns = start.lookup(&pid);
-    if (!start_ns)
+    if (!start_ns) {
         return 0;
+    }
+
     struct call_t data = {};
     data.lat = bpf_ktime_get_ns() - *start_ns;
     data.type = SYS;
     data.pid = pid;
+    data.sys_ret = args->ret;
     depth = entry.lookup_or_init(&data.pid, &zero);
     data.depth = *depth;
     char method_str[80] = "SYSCALL";
@@ -130,21 +129,6 @@ TRACEPOINT_PROBE(syscalls, sys_exit_SYSCALL) {
 }
 """
 
-prefix_template = """
-static inline bool prefix_%s(char *actual) {
-    char expected[] = "%s";
-    for (int i = 0; i < sizeof(expected) - 1; ++i) {
-        if (expected[i] != actual[i]) {
-            return false;
-        }
-    }
-    return true;
-}
-"""
-
-if args.method:
-    program += prefix_template % ("method", args.method)
-
 usdt_tab = []
 
 # Fonction pour activer un probe
@@ -154,7 +138,6 @@ def enable_probe(probe_name, func_name, read_class, read_method, read_file, is_r
         program += "#define IS_RETURN 1"
     depth = "*depth + 1" if not is_return else "*depth | (1ULL << 63)"
     update = "++(*depth);" if not is_return else "if (*depth) --(*depth);"
-    #filter_method = "if (!prefix_method(data.method)) { dis_sys.update(); return 0; } "
     program += php_trace_template.replace("NAME", func_name)                \
                              .replace("READ_CLASS", read_class)         \
                              .replace("READ_METHOD", read_method)       \
@@ -207,7 +190,8 @@ class CallEvent(ct.Structure):
         ("type", ct.c_ulonglong),
         ("clazz", ct.c_char * 80),
         ("method", ct.c_char * 80),
-        ("file", ct.c_char * 80)
+        ("file", ct.c_char * 80),
+        ("sys_ret", ct.c_long)
         ]
 
 total_lat = 0
@@ -216,14 +200,18 @@ def print_event(cpu, data, size):
     global total_lat
     event = ct.cast(data, ct.POINTER(CallEvent)).contents
     depth = event.depth & (~(1 << 63))
+    # syscalls
     if event.type == 1:
         total_lat += event.lat
-        print("%-6d %-16u %-40s" % (event.pid >> 32, event.lat, ("  " * (depth - 1)) + event.clazz.decode("utf-8", "replace") + "." + c.BLUE + event.method.decode("utf-8", "replace") + c.ENDC))    
+        print("%-6d %-16u %s : %ld" % (event.pid >> 32, event.lat, ("  " * (depth - 1)) + event.clazz.decode("utf-8", "replace") + "." + c.BLUE + event.method.decode("utf-8", "replace") + c.ENDC, event.sys_ret))    
+    # php function
     else:
         if event.depth & (1 << 63):
             direction = "<- "
-            print("%-6d %-16u %-40s" % (event.pid >> 32, total_lat, ("  " * (depth - 1)) + c.RED + "traced syscalls total latence" + c.ENDC))    
+            print("%-6d %-16u %s" % (event.pid >> 32, total_lat, ("  " * (depth - 1)) + c.BLUE + "traced syscalls total latence" + c.ENDC))    
             total_lat = 0
+            if event.method == "main":
+                exit()
         else:
             direction = "-> "
         print("%-6d %-16s %s" % (
