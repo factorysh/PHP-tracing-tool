@@ -6,11 +6,13 @@ import argparse
 import ctypes as ct
 import time
 import os
+import ipaddress
+import socket
 
 # globals
 total_lat = 0
 usdt_tab = []
-syscalls = ["socket", "socketpair", "bind", "listen", "accept", "accept4", "connect", "getsockname", "getpeername", "sendto", "recvfrom", "setsockopt", "getsockopt", "shutdown", "sendmsg", "sendmmsg", "recvmsg", "recvmmsg", "read", "write", "sendfile64"]
+syscalls = ["socket", "socketpair", "bind", "listen", "accept", "accept4", "connect", "getsockname", "getpeername", "sendto", "recvfrom", "setsockopt", "getsockopt", "shutdown", "sendmsg", "sendmmsg", "recvmsg", "recvmmsg", "read", "write", "open", "sendfile64"]
 #syscalls = []
 
 SYSCALL = 1
@@ -26,6 +28,9 @@ class CallEvent(ct.Structure):
         ("pid", ct.c_ulonglong),
         ("lat", ct.c_ulonglong),
         ("type", ct.c_ulonglong),
+        ("fdw", ct.c_ulonglong),
+        ("fdr", ct.c_ulonglong),
+        ("addr", ct.c_ulonglong),
         ("clazz", ct.c_char * 80),
         ("method", ct.c_char * 80),
         ("file", ct.c_char * 80),
@@ -47,23 +52,33 @@ args = parser.parse_args()
 
 # program template
 program = """
+#include <uapi/linux/ip.h>
+#include <uapi/linux/in.h>
+
 struct call_t {
     u64     depth;                  // first bit is direction (0 entry, 1 return)
     u64     pid;                    // (tgid << 32) + pid from bpf_get_current...
     u64     lat;                    // time latency
     u64     type;                   // syscall or php function
+    u64     fdw;                    // filedescriptor write
+    u64     fdr;                    // filedescriptor read
+    u64     addr;                   // addr to connect
     char    clazz[80];              // class name
     char    method[80];             // method name
     char    file[80];               // php file name
 };
 
-#define SYS 1
-#define FUNC 2
+#define SYS     1
+#define FUNC    2
+#define DISK    3
+#define NET     4
 
 BPF_PERF_OUTPUT(calls);
 BPF_HASH(entry, u64, u64);
 BPF_HASH(start, u64, u64);
 BPF_HASH(start_func, u64, u64);
+BPF_HASH(fdw, u64, u64);
+BPF_HASH(addr, u64, u64);
 """
 
 # php probes template
@@ -115,6 +130,7 @@ TRACEPOINT_PROBE(syscalls, sys_enter_{syscall_name}) {{
     }}
     u64 time = bpf_ktime_get_ns();
     start.update(&pid, &time);
+    SYSCALL_ENTER_LOGIC
     return 0;
 }}
 
@@ -139,8 +155,9 @@ TRACEPOINT_PROBE(syscalls, sys_exit_{syscall_name}) {{
         calls.perf_submit(args, &data, sizeof(data));
         return 0;
     }}
-
+    
     data.lat = bpf_ktime_get_ns() - *start_ns;
+    SYSCALL_EXIT_LOGIC
     calls.perf_submit(args, &data, sizeof(data));
     return 0;
 }}
@@ -161,10 +178,25 @@ def callback(cpu, data, size):
     # syscalls
     if event.type == SYSCALL:
         total_lat += event.lat
+        message = "sys." + BLUE + event.method.decode("utf-8", "replace") + ENDC
+        if event.fdw > 0:
+            message += " to fd: " + str(event.fdw)
+        if event.fdr > 0:
+            message += " return fd: " + str(event.fdr)
+        if event.addr > 0:
+            addr = str(ipaddress.ip_address(event.addr))
+            rev = addr.split('.')[::-1]
+            addr = '.'.join(rev)
+            message += " connect to: " + addr
+            try:
+                host = socket.gethostbyaddr(addr)
+                message += " -> " + host[0]
+            except socket.herror or socket.gaierror:
+                pass
         print_event(
             event.pid >> 32,
             event.lat,
-            "sys." + BLUE + event.method.decode("utf-8", "replace") + ENDC,
+            message,
             depth
         )    
     # php function
@@ -193,7 +225,7 @@ def callback(cpu, data, size):
             exit()
 
 # function for trace a php probe
-def enable_probe(probe_name, func_name, read_class, read_method, read_file, is_return):
+def generate_php_probe(probe_name, func_name, read_class, read_method, read_file, is_return):
     global program, php_trace_template, usdt
     #if is_return:
     #    program += "#define IS_RETURN 1"
@@ -207,14 +239,57 @@ def enable_probe(probe_name, func_name, read_class, read_method, read_file, is_r
             'depth': depth,
             'update_func': update
             }
-    program += php_trace_template.format(**values)
     for pid in args.pid:
         usdt = USDT(pid=pid)
         usdt_tab.append(usdt)
         usdt.enable_probe_or_bail(probe_name, func_name)
+    return php_trace_template.format(**values)
+
+#
+def check_syscall(func):
+    def wrapper(*args, **kwargs):
+        template = func(*args)
+        enter_logic = ""
+        exit_logic = ""
+        if args[0] == "write" or args[0] == "sendto" or args[0] == "sendmsg":
+            enter_logic = """
+            u64 fd = args->fd;
+            fdw.update(&pid, &fd);
+            """
+            exit_logic = """
+            u64 *fd = fdw.lookup(&pid);
+            if (!fd) {
+                return 0;
+            }
+            data.fdw = *fd;
+            fdw.delete(&pid);
+            """
+        elif args[0] == "open" or args[0] == "socket":
+            exit_logic = """
+            u64 ret = args->ret;
+            data.fdr = ret;
+            """
+        elif args[0] == "connect":
+            enter_logic = """
+            struct sockaddr_in *useraddr = ((struct sockaddr_in *)(args->uservaddr));
+            u64 a = useraddr->sin_addr.s_addr;
+            addr.update(&pid, &a);
+            """
+            exit_logic = """
+            u64 *a = addr.lookup(&pid);
+            if (!a) {
+                return 0;
+            }
+            data.addr = *a;
+            addr.delete(&pid);
+            """
+        return template.replace("SYSCALL_ENTER_LOGIC", enter_logic).replace("SYSCALL_EXIT_LOGIC", exit_logic)
+    return wrapper
+
 
 # function for trace a syscall
-def enable_syscall_tracepoint(sys_name):
+@check_syscall
+def generate_syscall_tracepoint(sys_name):
     global program
     # get the pid condition
     pid_condition = ""
@@ -223,24 +298,29 @@ def enable_syscall_tracepoint(sys_name):
         if i < len(args.pid) - 1:
             pid_condition += " && "
     # template
-    values = {'syscall_name': sys_name, 'pid_condition': pid_condition}
-    program += sys_trace_template.format(**values)
+    values = {
+            'syscall_name': sys_name,
+            'pid_condition': pid_condition
+            }
+    return sys_trace_template.format(**values)
 
 ###############################################################################
 
+# Generate the C program
+
 # trace php function entry and return
-enable_probe("function__entry", "php_entry",
+program += generate_php_probe("function__entry", "php_entry",
     "bpf_usdt_readarg(4, ctx, &clazz);",
     "bpf_usdt_readarg(1, ctx, &method);",
     "bpf_usdt_readarg(2, ctx, &file);", is_return=False)
-enable_probe("function__return", "php_return",
+program += generate_php_probe("function__return", "php_return",
     "bpf_usdt_readarg(4, ctx, &clazz);",
     "bpf_usdt_readarg(1, ctx, &method);",
     "bpf_usdt_readarg(2, ctx, &file);", is_return=True)
 
 # trace the syscalls in the list
 for sys in syscalls:
-    enable_syscall_tracepoint(sys)
+    program += generate_syscall_tracepoint(sys)
 
 # C PROGRAM READY!
 
