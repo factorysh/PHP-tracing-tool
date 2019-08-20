@@ -11,11 +11,16 @@ import socket
 
 # globals
 total_lat = 0
+total_net_time = 0
+total_disk_time = 0
+
 usdt_tab = []
-syscalls = ["socket", "socketpair", "bind", "listen", "accept", "accept4", "connect", "getsockname", "getpeername", "sendto", "recvfrom", "setsockopt", "getsockopt", "shutdown", "sendmsg", "sendmmsg", "recvmsg", "recvmmsg", "read", "write", "open", "sendfile64"]
+syscalls = ["socket", "socketpair", "bind", "listen", "accept", "accept4", "connect", "getsockname", "getpeername", "sendto", "recvfrom", "setsockopt", "getsockopt", "shutdown", "sendmsg", "sendmmsg", "recvmsg", "recvmmsg", "read", "write", "open", "close", "sendfile64"]
 #syscalls = []
 
 SYSCALL = 1
+DISK = 3
+NET = 4
 PADDING = "  "
 BLUE = '\033[95m'
 UNDERLINE = '\033[4m'
@@ -28,8 +33,10 @@ class CallEvent(ct.Structure):
         ("pid", ct.c_ulonglong),
         ("lat", ct.c_ulonglong),
         ("type", ct.c_ulonglong),
+        ("fd_type", ct.c_ulonglong),
         ("fdw", ct.c_ulonglong),
         ("fdr", ct.c_ulonglong),
+        ("fd_ret", ct.c_ulonglong),
         ("addr", ct.c_ulonglong),
         ("clazz", ct.c_char * 80),
         ("method", ct.c_char * 80),
@@ -60,8 +67,10 @@ struct call_t {
     u64     pid;                    // (tgid << 32) + pid from bpf_get_current...
     u64     lat;                    // time latency
     u64     type;                   // syscall or php function
+    u64     fd_type;                // disk or net filedescriptor
     u64     fdw;                    // filedescriptor write
     u64     fdr;                    // filedescriptor read
+    u64     fd_ret;                 // returned filedescriptor
     u64     addr;                   // addr to connect
     char    clazz[80];              // class name
     char    method[80];             // method name
@@ -78,7 +87,9 @@ BPF_HASH(entry, u64, u64);
 BPF_HASH(start, u64, u64);
 BPF_HASH(start_func, u64, u64);
 BPF_HASH(fdw, u64, u64);
+BPF_HASH(fdr, u64, u64);
 BPF_HASH(addr, u64, u64);
+BPF_HASH(filedescriptors, u64, u64);
 """
 
 # php probes template
@@ -100,8 +111,8 @@ int {name}(struct pt_regs *ctx) {{
     data.pid = pid;
     depth = entry.lookup_or_init(&data.pid, &zero);
     data.depth = {depth};
-    {update_func}   
-    
+    {update_func}
+
     if (!(data.depth & (1ULL << 63))) {{
         u64 time = bpf_ktime_get_ns();
         start_func.update(&id, &time);
@@ -168,11 +179,11 @@ TRACEPOINT_PROBE(syscalls, sys_exit_{syscall_name}) {{
 ###############################################################################
 
 def print_event(pid, lat, message, depth):
-    print("%-6d %-6s %-40s" % (pid, str(lat), (PADDING * (depth - 1)) + message))
+    print("%-6d %-10s %-40s" % (pid, str(lat), (PADDING * (depth - 1)) + message))
 
 # callback function for open_perf_buffer
 def callback(cpu, data, size):
-    global total_lat
+    global total_lat, total_net_time, total_disk_time
     event = ct.cast(data, ct.POINTER(CallEvent)).contents
     depth = event.depth & (~(1 << 63))
     # syscalls
@@ -180,9 +191,15 @@ def callback(cpu, data, size):
         total_lat += event.lat
         message = "sys." + BLUE + event.method.decode("utf-8", "replace") + ENDC
         if event.fdw > 0:
-            message += " to fd: " + str(event.fdw)
+            message += " on fd: " + str(event.fdw)
         if event.fdr > 0:
-            message += " return fd: " + str(event.fdr)
+            message += " on fd: " + str(event.fdr)
+        if event.fd_ret > 0:
+            message += " return fd: " + str(event.fd_ret)
+        if event.fd_type == NET:
+            total_net_time += event.lat
+        elif event.fd_type == DISK:
+            total_disk_time += event.lat
         if event.addr > 0:
             addr = str(ipaddress.ip_address(event.addr))
             rev = addr.split('.')[::-1]
@@ -209,8 +226,22 @@ def callback(cpu, data, size):
                         total_lat,
                         BLUE + "traced syscalls total latence" + ENDC,
                         depth
-                )    
+                )
+                print_event(
+                        event.pid >> 32,
+                        total_net_time,
+                        BLUE + "sys time spent on the network" + ENDC,
+                        depth
+                )
+                print_event(
+                        event.pid >> 32,
+                        total_disk_time,
+                        BLUE + "sys time spent on the disk" + ENDC,
+                        depth
+                )
                 total_lat = 0
+                total_net_lat = 0
+                total_disk_lat = 0
         else:
             direction = "-> "
         print_event(
@@ -245,50 +276,130 @@ def generate_php_probe(probe_name, func_name, read_class, read_method, read_file
         usdt.enable_probe_or_bail(probe_name, func_name)
     return php_trace_template.format(**values)
 
-#
-def check_syscall(func):
+def replace_syscall_logic(template, enter_logic, exit_logic):
+    return template.replace("SYSCALL_ENTER_LOGIC", enter_logic).replace("SYSCALL_EXIT_LOGIC", exit_logic)
+
+def intercept_read_fd(func):
     def wrapper(*args, **kwargs):
         template = func(*args)
-        enter_logic = ""
-        exit_logic = ""
-        if args[0] == "write" or args[0] == "sendto" or args[0] == "sendmsg":
+        if args[0] == "read":
+            enter_logic = """
+            u64 fd = args->fd;
+            fdr.update(&pid, &fd);
+
+            SYSCALL_ENTER_LOGIC
+            """
+            exit_logic = """
+            u64 *fd = fdr.lookup(&pid);
+            if (fd) {
+                data.fdr = *fd;
+                fdr.delete(&pid);
+                u64 *fdt = filedescriptors.lookup(fd);
+                if (fdt) {
+                    data.fd_type = *fdt;
+                }
+            }
+
+            SYSCALL_EXIT_LOGIC
+            """
+        else:
+            return template
+        return template.replace("SYSCALL_ENTER_LOGIC", enter_logic).replace("SYSCALL_EXIT_LOGIC", exit_logic)
+    return wrapper
+
+def intercept_write_fd(func):
+    def wrapper(*args, **kwargs):
+        template = func(*args)
+        if args[0] == "write" or args[0] == "sendto" or args[0] == "sendmmsg":
             enter_logic = """
             u64 fd = args->fd;
             fdw.update(&pid, &fd);
+
+            SYSCALL_ENTER_LOGIC
             """
             exit_logic = """
             u64 *fd = fdw.lookup(&pid);
-            if (!fd) {
-                return 0;
+            if (fd) {
+                data.fdw = *fd;
+                fdw.delete(&pid);
+                u64 *fdt = filedescriptors.lookup(fd);
+                if (fdt) {
+                    data.fd_type = *fdt;
+                }
             }
-            data.fdw = *fd;
-            fdw.delete(&pid);
+
+            SYSCALL_EXIT_LOGIC
             """
-        elif args[0] == "open" or args[0] == "socket":
+        else:
+            return template
+        return template.replace("SYSCALL_ENTER_LOGIC", enter_logic).replace("SYSCALL_EXIT_LOGIC", exit_logic)
+    return wrapper
+
+def store_open_fds(func):
+    def wrapper(*args, **kwargs):
+        template = func(*args)
+        if args[0] == "open":
             exit_logic = """
             u64 ret = args->ret;
-            data.fdr = ret;
+            u64 flag = DISK;
+            filedescriptors.update(&ret, &flag);
+            data.fd_ret = ret;
+
+            SYSCALL_EXIT_LOGIC
             """
-        elif args[0] == "connect":
+        elif args[0] == "socket":
+            exit_logic = """
+            u64 ret = args->ret;
+            u64 flag = NET;
+            filedescriptors.update(&ret, &flag);
+            data.fd_ret = ret;
+
+            SYSCALL_EXIT_LOGIC
+            """
+        else:
+            return template
+        return replace_syscall_logic(template, "SYSCALL_ENTER_LOGIC", exit_logic)
+    return wrapper
+
+# decorator for trace the address in the connect arg
+def trace_connect_address(func):
+    def wrapper(*args, **kwargs):
+        template = func(*args)
+        if args[0] == "connect":
             enter_logic = """
             struct sockaddr_in *useraddr = ((struct sockaddr_in *)(args->uservaddr));
             u64 a = useraddr->sin_addr.s_addr;
             addr.update(&pid, &a);
+
+            SYSCALL_ENTER_LOGIC
             """
             exit_logic = """
             u64 *a = addr.lookup(&pid);
-            if (!a) {
-                return 0;
+            if (a) {
+                data.addr = *a;
+                addr.delete(&pid);
             }
-            data.addr = *a;
-            addr.delete(&pid);
+            SYSCALL_EXIT_LOGIC
             """
-        return template.replace("SYSCALL_ENTER_LOGIC", enter_logic).replace("SYSCALL_EXIT_LOGIC", exit_logic)
+        else:
+            return template
+        return replace_syscall_logic(template, enter_logic, exit_logic)
     return wrapper
 
+def minimal_decorator(func):
+    def wrapper(*args, **kwargs):
+        template = func(*args)
+        return replace_syscall_logic(template, "", "")
+    return wrapper
 
 # function for trace a syscall
-@check_syscall
+
+# obligatoire
+@minimal_decorator
+@trace_connect_address
+@intercept_write_fd
+@intercept_read_fd
+@store_open_fds
 def generate_syscall_tracepoint(sys_name):
     global program
     # get the pid condition
@@ -334,7 +445,7 @@ if args.check or args.debug:
 bpf = BPF(text=program, usdt_contexts=usdt_tab)
 
 print("php super tool, pid = %s... Ctrl-C to quit." % (args.pid))
-print("%-6s %-6s %s" % ("PID", "LAT", "METHOD"))
+print("%-6s %-10s %s" % ("PID", "LAT", "METHOD"))
 
 bpf["calls"].open_perf_buffer(callback, page_cnt=4096)
 while 1:
