@@ -1,0 +1,19 @@
+version: "3"
+
+services:
+  web:
+    image: nginx
+    ports:
+      - "8080:80"
+    volumes:
+      - ./nginx:/etc/nginx/conf.d
+      - ./src:/var/www/html
+    restart: always
+
+  php:
+    image: php-app
+    environment:
+      USE_ZEND_DTRACE: 1
+    volumes:
+      - ./src:/var/www/html
+    restart: always

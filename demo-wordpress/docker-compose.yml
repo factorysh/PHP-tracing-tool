@@ -1,0 +1,34 @@
+version: "3"
+
+services:
+
+  wordpress:
+    image: wordpress-debug
+    restart: always
+    volumes:
+      - ./wordpress:/var/www/html
+    environment:
+      USE_ZEND_DTRACE: 1
+      WORDPRESS_DB_HOST: db
+      WORDPRESS_DB_USER: admin
+      WORDPRESS_DB_PASSWORD: password
+      WORDPRESS_DB_NAME: db_wordpress
+
+  nginx:
+    image: nginx
+    ports:
+      - '8080:80'
+    volumes:
+      - ./nginx:/etc/nginx/conf.d
+      - ./logs/nginx:/var/log/nginx
+      - ./wordpress:/var/www/html
+    restart: always
+
+  db:
+    image: mysql:5.7
+    restart: always
+    environment:
+      MYSQL_DATABASE: db_wordpress
+      MYSQL_USER: admin
+      MYSQL_PASSWORD: password
+      MYSQL_RANDOM_ROOT_PASSWORD: '1'
