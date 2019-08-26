@@ -13,7 +13,6 @@ from collections import defaultdict
 
 # globals
 
-USDT_TAB = []
 SYSCALLS = ["socket", "socketpair", "bind", "listen", "accept", "accept4",
             "connect", "getsockname", "getpeername", "sendto", "recvfrom",
             "setsockopt", "getsockopt", "shutdown", "sendmsg", "sendmmsg",
@@ -446,53 +445,64 @@ class Callback:
                 exit()
 
 
-def generate_php_probe( pids, probe_name, func_name, read_class, read_method,
-        read_file, is_return):
-    "Generate the c for php probes"
-    depth = "*depth + 1" if not is_return else "*depth | (1ULL << 63)"
-    update = "++(*depth);" if not is_return else "if (*depth) --(*depth);"
-    values = {
+###############################################################################
+
+
+class PHPEvents:
+    usdt = []
+    txt = []
+    probes = []
+
+    def probe(self, probe_name, func_name, read_class, read_method,
+              read_file, is_return=False):
+        "Generate the c for php probes"
+        depth = "*depth + 1" if not is_return else "*depth | (1ULL << 63)"
+        update = "++(*depth);" if not is_return else "if (*depth) --(*depth);"
+        values = {
             'name': func_name,
             'read_class': read_class,
             'read_method': read_method,
             'read_file': read_file,
             'depth': depth,
             'update_func': update
-            }
-    for pid in pids:
-        usdt = USDT(pid=pid)
-        usdt.enable_probe_or_bail(probe_name, func_name)
-        global USDT_TAB
-        USDT_TAB.append(usdt)
-    global PHP_TRACE_TEMPLATE
-    return PHP_TRACE_TEMPLATE.format(**values)
+        }
+        self.txt.append(PHP_TRACE_TEMPLATE.format(**values))
+        self.probes.append((probe_name, func_name))
 
-###############################################################################
+    def generate(self, pids):
+        for probe_name, func_name in self.probes:
+            for pid in pids:
+                usdt = USDT(pid=pid)
+                usdt.enable_probe_or_bail(probe_name, func_name)
+                self.usdt.append(usdt)
+        return "".join(self.txt)
 
 
 def c_program(pids):
     "Generate the C program"
-    global PROGRAM
-    program = PROGRAM
+    program = io.StringIO(PROGRAM)
 
-    program += generate_php_probe(pids,
-                                  "function__entry",
-                                  "php_entry",
-                                  "bpf_usdt_readarg(4, ctx, &clazz);",
-                                  "bpf_usdt_readarg(1, ctx, &method);",
-                                  "bpf_usdt_readarg(2, ctx, &file);",
-                                  is_return=False)
-    program += generate_php_probe(pids,
-                                  "function__return",
-                                  "php_return",
-                                  "bpf_usdt_readarg(4, ctx, &clazz);",
-                                  "bpf_usdt_readarg(1, ctx, &method);",
-                                  "bpf_usdt_readarg(2, ctx, &file);",
-                                  is_return=True)
+    php = PHPEvents()
 
+    php.probe(pids,
+              "function__entry",
+              "php_entry",
+              "bpf_usdt_readarg(4, ctx, &clazz);",
+              "bpf_usdt_readarg(1, ctx, &method);",
+              "bpf_usdt_readarg(2, ctx, &file);",
+              is_return=False)
+    php.probe(pids,
+              "function__return",
+              "php_return",
+              "bpf_usdt_readarg(4, ctx, &clazz);",
+              "bpf_usdt_readarg(1, ctx, &method);",
+              "bpf_usdt_readarg(2, ctx, &file);",
+              is_return=True)
+
+    program.write(php.generate(pids))
     # trace syscalls
-    program += SyscallEvents().generate(pids)
-    return program
+    program.write(SyscallEvents().generate(pids))
+    return program.getvalue()
 
 
 def main():
