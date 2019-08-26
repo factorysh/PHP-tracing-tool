@@ -19,7 +19,7 @@ disk_write_volume = 0
 net_read_volume = 0
 disk_read_volume = 0
 
-usdt_tab = []
+USDT_TAB = []
 SYSCALLS = ["socket", "socketpair", "bind", "listen", "accept", "accept4",
             "connect", "getsockname", "getpeername", "sendto", "recvfrom",
             "setsockopt", "getsockopt", "shutdown", "sendmsg", "sendmmsg",
@@ -212,10 +212,8 @@ class SyscallEvents:
     def generate(self, pids, syscalls=None):
         if syscalls is None:
             global SYSCALLS
-            sysacalls = SYSCALLS
+            syscalls = SYSCALLS
         return "".join(self.syscall(pids, syscall) for syscall in syscalls)
-
-
 
 e = SyscallEvents()
 event = e.event
@@ -356,135 +354,129 @@ def print_event(pid, lat, message, depth):
     print("%-6d %-10s %-40s" %
           (pid, str(lat), (PADDING * (depth - 1)) + message))
 
+def syscall_message(event):
+    message = "sys." + BLUE + event.method.decode("utf-8", "replace") + ENDC
+    if event.fdw > 0:
+        message += " write on fd: " + str(event.fdw)
+    if event.fdr > 0:
+        message += " read fd: " + str(event.fdr)
+    if event.fd_ret > 0:
+        message += " return fd: " + str(event.fd_ret)
+
+    if event.addr > 0:
+        addr = str(ipaddress.ip_address(event.addr))
+        rev = addr.split('.')[::-1]
+        addr = '.'.join(rev)
+        message += " connect to: " + addr
+        try:
+            host = socket.gethostbyaddr(addr)
+            message += " -> " + host[0]
+        except socket.herror or socket.gaierror:
+            pass 
+    return message
+
 # callback function for open_perf_buffer
+def mycallback(args):
+    def callback(cpu, data, size):
+        event = ct.cast(data, ct.POINTER(CallEvent)).contents
+        depth = event.depth & (~(1 << 63))
+        if event.type == SYSCALL:
+            global total_lat
+            total_lat += event.lat
 
+            if event.fd_type == NET:
+                global total_net_time
+                total_net_time += event.lat
+                
+                if event.bytes_write > 0:
+                    global net_write_volume
+                    net_write_volume += event.bytes_write
+                elif event.bytes_read > 0:
+                    global net_read_volume
+                    net_read_volume += event.bytes_read
+            
+            elif event.fd_type == DISK:
+                global total_disk_time
+                total_disk_time += event.lat
+                
+                if event.bytes_write > 0:
+                    global disk_write_volume
+                    disk_write_volume += event.bytes_write
+                elif event.bytes_read > 0:
+                    global disk_read_volume
+                    disk_read_volume += event.bytes_read
 
-def callback(cpu, data, size):
-    global total_lat, total_net_time, total_disk_time, net_write_volume, \
-        disk_write_volume, net_read_volume, disk_read_volume
-    event = ct.cast(data, ct.POINTER(CallEvent)).contents
-    depth = event.depth & (~(1 << 63))
-    # If the event is a syscall
-    if event.type == SYSCALL:
+            if not args.syscalls:
+                return
 
-        # Add the syscall latency to the total lat
-        total_lat += event.lat
-
-        # If the syscall manipulate a NET filedescriptor (a unix socket)
-        if event.fd_type == NET:
-            total_net_time += event.lat
-            # add the volume of written or read bytes in the total
-            if event.bytes_write > 0:
-                net_write_volume += event.bytes_write
-            elif event.bytes_read > 0:
-                net_read_volume += event.bytes_read
-        # If the syscall manipulate a DISK filedescriptor
-        elif event.fd_type == DISK:
-            total_disk_time += event.lat
-            # add the volume of written or read bytes in the total
-            if event.bytes_write > 0:
-                disk_write_volume += event.bytes_write
-            elif event.bytes_read > 0:
-                disk_read_volume += event.bytes_read
-
-        # if there isn't the --syscalls option
-        if not args.syscalls:
-            return
-
-        # generate the syscall print message
-        message = "sys." + BLUE + event.method.decode("utf-8", "replace") + ENDC
-        # if the syscall write on a fd
-        if event.fdw > 0:
-            message += " write on fd: " + str(event.fdw)
-        # if the syscall read a fd
-        if event.fdr > 0:
-            message += " read fd: " + str(event.fdr)
-        # if the syscall return a fd
-        if event.fd_ret > 0:
-            message += " return fd: " + str(event.fd_ret)
-
-        # take the address for connect syscalls
-        if event.addr > 0:
-            addr = str(ipaddress.ip_address(event.addr))
-            rev = addr.split('.')[::-1]
-            addr = '.'.join(rev)
-            message += " connect to: " + addr
-            try:
-                host = socket.gethostbyaddr(addr)
-                message += " -> " + host[0]
-            except socket.herror or socket.gaierror:
-                pass
-
-        # print
-        print_event(
-            event.pid >> 32,
-            event.lat,
-            message,
-            depth
-        )
-    # php function
-    else:
-        if event.depth & (1 << 63):
-            # return function case
-            direction = "<- "
-            # print the report of all the syscalls in this function
-            if syscalls and total_lat > 0:
-                # the total latency
-                print_event(
-                        event.pid >> 32,
-                        total_lat,
-                        BLUE + "traced syscalls total latence" + ENDC,
-                        depth
-                )
-            if syscalls and total_net_time > 0:
-                # the total net usage time
-                print_event(
-                    event.pid >> 32, total_net_time, BLUE + (
-                        "sys time spent on the network |-> %s bytes written, %s bytes read" %
-                        (str(net_write_volume), str(net_read_volume))) + ENDC, depth)
-            if syscalls and total_disk_time > 0:
-                # the total disk usage time
-                print_event(
-                    event.pid >> 32, total_disk_time, BLUE + (
-                        "sys time spent on the disk |-> %s bytes written, %s bytes read" %
-                        (str(disk_write_volume), str(disk_read_volume))) + ENDC, depth)
-                # reset
-                total_lat = 0
-                total_net_lat = 0
-                total_disk_lat = 0
-                net_write_volume = 0
-                disk_write_volume = 0
-                net_read_volume = 0
-                disk_read_volume = 0
-        else:
-            # entry function case
-            direction = "-> "
-        # print the function details
-        print_event(
+            print_event(
                 event.pid >> 32,
-                str(event.lat) if event.lat > 0 else "-",
-                direction + event.clazz.decode('utf-8', 'replace') + "."
-                    + event.method.decode('utf-8', 'replace') + " "
-                    + UNDERLINE + "from " + event.file + ENDC,
+                event.lat,
+                syscall_message(event),
                 depth
             )
-        # quit on the last main return
-        if event.depth & (1 << 63) and event.method == "main" and depth == 1:
-            exit()
+        
+        else:
+            # Return function case
+            if event.depth & (1 << 63):
+                direction = "<- "
+                
+                if SYSCALLS:
+                    if total_lat > 0:
+                        print_event(
+                                event.pid >> 32,
+                                total_lat,
+                                BLUE + "traced syscalls total latence" + ENDC,
+                                depth
+                        )
 
-# function for trace a php probe
-
+                    if total_net_time > 0:
+                        print_event(
+                            event.pid >> 32, total_net_time, BLUE + (
+                                "sys time spent on the network |-> %s bytes written, %s bytes read" %
+                                (str(net_write_volume), str(net_read_volume))) + ENDC, depth)
+                    
+                    if total_disk_time > 0:
+                        print_event(
+                            event.pid >> 32, total_disk_time, BLUE + (
+                                "sys time spent on the disk |-> %s bytes written, %s bytes read" %
+                                (str(disk_write_volume), str(disk_read_volume))) + ENDC, depth)
+                    
+                    # reset counters
+                    total_lat = 0
+                    total_net_lat = 0
+                    total_disk_lat = 0
+                    net_write_volume = 0
+                    disk_write_volume = 0
+                    net_read_volume = 0
+                    disk_read_volume = 0
+            # Entry function case
+            else:
+                direction = "-> "
+            
+            print_event(
+                    event.pid >> 32,
+                    str(event.lat) if event.lat > 0 else "-",
+                    direction + event.clazz.decode('utf-8', 'replace') + "."
+                        + event.method.decode('utf-8', 'replace') + " "
+                        + UNDERLINE + "from " + event.file + ENDC,
+                    depth
+                )
+            # Quit the program on the last main return
+            if event.depth & (1 << 63) and event.method == "main" and depth == 1:
+                exit()
+    
+    return callback
 
 def generate_php_probe(
+        pids,
         probe_name,
         func_name,
         read_class,
         read_method,
         read_file,
         is_return):
-    global program, php_trace_template, usdt
-    # if is_return:
-    #    program += "#define IS_RETURN 1"
+    "Generate the c for php probes"
     depth = "*depth + 1" if not is_return else "*depth | (1ULL << 63)"
     update = "++(*depth);" if not is_return else "if (*depth) --(*depth);"
     values = {
@@ -495,60 +487,40 @@ def generate_php_probe(
             'depth': depth,
             'update_func': update
             }
-    for pid in args.pid:
+    for pid in pids:
         usdt = USDT(pid=pid)
-        usdt_tab.append(usdt)
         usdt.enable_probe_or_bail(probe_name, func_name)
+        global USDT_TAB
+        USDT_TAB.append(usdt)
+    global php_trace_template
     return php_trace_template.format(**values)
 
-# function for trace a syscall
-
-
-@minimal_decorator
-@trace_connect_address
-@event_write_on_fd
-@event_read_on_fd
-@store_open_fds
-def generate_syscall_tracepoint(sys_name, pids):
-    # get the pid condition
-    pid_condition = ""
-    for i, pid in enumerate(pids):
-        pid_condition += "pid >> 32 != %s" % (str(pid))
-        if i < len(pids) - 1:
-            pid_condition += " && "
-    # template
-    values = {
-            'syscall_name': sys_name,
-            'pid_condition': pid_condition
-            }
-    return sys_trace_template.format(**values)
-
 ###############################################################################
-
 
 def c_program(pids):
     "Generate the C program"
     global PROGRAM
     program = PROGRAM
-    # trace php function entry and return
-    program = generate_php_probe("function__entry",
+    
+    program += generate_php_probe(pids,
+                                "function__entry",
                                 "php_entry",
                                 "bpf_usdt_readarg(4, ctx, &clazz);",
                                 "bpf_usdt_readarg(1, ctx, &method);",
                                 "bpf_usdt_readarg(2, ctx, &file);",
                                 is_return=False)
-    program += generate_php_probe("function__return",
+    program += generate_php_probe(pids,
+                                "function__return",
                                 "php_return",
                                 "bpf_usdt_readarg(4, ctx, &clazz);",
                                 "bpf_usdt_readarg(1, ctx, &method);",
                                 "bpf_usdt_readarg(2, ctx, &file);",
                                 is_return=True)
 
-    # trace the syscalls in the list
-    for sys in syscalls:
-        program += generate_syscall_tracepoint(sys, pids)
+    # trace syscalls
+    global e
+    program += e.generate(pids)
     return program
-
 
 def main():
     # cli arguments
@@ -565,10 +537,10 @@ def main():
     parser.add_argument(
         "-S", "--syscalls", action="store_true",
         help="print the syscalls details inside each function")
-
     args = parser.parse_args()
 
     program = c_program(args.pid)
+
     # debug options
     if args.check or args.debug:
         print(program)
@@ -576,19 +548,18 @@ def main():
             exit()
 
     # inject the C program generated in eBPF
-    bpf = BPF(text=program, usdt_contexts=usdt_tab)
+    bpf = BPF(text=program, usdt_contexts=USDT_TAB)
 
     print("php super tool, pid = %s... Ctrl-C to quit." % (args.pid))
     print("%-6s %-10s %s" % ("PID", "LAT", "METHOD"))
 
     # don't forget the page_cnt option for increase the ring buffer size
-    bpf["calls"].open_perf_buffer(callback, page_cnt=8192)
+    bpf["calls"].open_perf_buffer(mycallback(args), page_cnt=8192)
     while True:
         try:
             bpf.perf_buffer_poll()
         except KeyboardInterrupt:
             exit()
-
 
 if __name__ == "__main__":
     main()
