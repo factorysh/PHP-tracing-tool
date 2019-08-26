@@ -384,7 +384,8 @@ def print_event(pid, lat, message, depth):
 
 
 def callback(cpu, data, size):
-    global total_lat, total_net_time, total_disk_time, net_write_volume, disk_write_volume, net_read_volume, disk_read_volume
+    global total_lat, total_net_time, total_disk_time, net_write_volume, \
+        disk_write_volume, net_read_volume, disk_read_volume
     event = ct.cast(data, ct.POINTER(CallEvent)).contents
     depth = event.depth & (~(1 << 63))
     # If the event is a syscall
