@@ -442,14 +442,8 @@ class Callback:
                 exit()
 
 
-def generate_php_probe(
-        pids,
-        probe_name,
-        func_name,
-        read_class,
-        read_method,
-        read_file,
-        is_return):
+def generate_php_probe( pids, probe_name, func_name, read_class, read_method,
+        read_file, is_return):
     "Generate the c for php probes"
     depth = "*depth + 1" if not is_return else "*depth | (1ULL << 63)"
     update = "++(*depth);" if not is_return else "if (*depth) --(*depth);"
