@@ -98,7 +98,7 @@ BPF_HASH(filedescriptors, u64, u64);
 """
 
 # php probes template
-php_trace_template = """
+PHP_TRACE_TEMPLATE = """
 int {name}(struct pt_regs *ctx) {{
     u64 *depth, zero = 0, clazz = 0, method = 0, file = 0;
     struct call_t data = {{}};
@@ -215,8 +215,10 @@ class SyscallEvents:
             syscalls = SYSCALLS
         return "".join(self.syscall(pids, syscall) for syscall in syscalls)
 
+
 e = SyscallEvents()
 event = e.event
+
 
 @event("read")
 def event_read_on_fd():
@@ -243,6 +245,7 @@ def event_read_on_fd():
 
             """
 
+
 @event("write", "sendto", "sendmsg")
 def event_write_on_fd():
     """
@@ -253,7 +256,7 @@ def event_write_on_fd():
             u64 fdarg = args->fd;
             fd.update(&pid, &fdarg);
 
-            """ , \
+            """, \
             """
             data.bytes_write = args->ret;
             u64 *fdarg = fd.lookup(&pid);
@@ -320,9 +323,10 @@ def trace_connect_address():
 
             """
 
+
 @event("bind")
 def trace_bind_address():
-    return  """
+    return """
             struct sockaddr_in *useraddr = ((struct sockaddr_in *)(args->umyaddr));
             u64 a = useraddr->sin_addr.s_addr;
             addr.update(&pid, &a);
@@ -354,6 +358,7 @@ def print_event(pid, lat, message, depth):
     print("%-6d %-10s %-40s" %
           (pid, str(lat), (PADDING * (depth - 1)) + message))
 
+
 def syscall_message(event):
     message = "sys." + BLUE + event.method.decode("utf-8", "replace") + ENDC
     if event.fdw > 0:
@@ -376,6 +381,8 @@ def syscall_message(event):
     return message
 
 # callback function for open_perf_buffer
+
+
 def mycallback(args):
     def callback(cpu, data, size):
         event = ct.cast(data, ct.POINTER(CallEvent)).contents
@@ -463,10 +470,12 @@ def mycallback(args):
                     depth
                 )
             # Quit the program on the last main return
-            if event.depth & (1 << 63) and event.method == "main" and depth == 1:
+            if event.depth & (
+                    1 << 63) and event.method == "main" and depth == 1:
                 exit()
 
     return callback
+
 
 def generate_php_probe(
         pids,
@@ -492,10 +501,11 @@ def generate_php_probe(
         usdt.enable_probe_or_bail(probe_name, func_name)
         global USDT_TAB
         USDT_TAB.append(usdt)
-    global php_trace_template
-    return php_trace_template.format(**values)
+    global PHP_TRACE_TEMPLATE
+    return PHP_TRACE_TEMPLATE.format(**values)
 
 ###############################################################################
+
 
 def c_program(pids):
     "Generate the C program"
@@ -503,31 +513,36 @@ def c_program(pids):
     program = PROGRAM
 
     program += generate_php_probe(pids,
-                                "function__entry",
-                                "php_entry",
-                                "bpf_usdt_readarg(4, ctx, &clazz);",
-                                "bpf_usdt_readarg(1, ctx, &method);",
-                                "bpf_usdt_readarg(2, ctx, &file);",
-                                is_return=False)
+                                  "function__entry",
+                                  "php_entry",
+                                  "bpf_usdt_readarg(4, ctx, &clazz);",
+                                  "bpf_usdt_readarg(1, ctx, &method);",
+                                  "bpf_usdt_readarg(2, ctx, &file);",
+                                  is_return=False)
     program += generate_php_probe(pids,
-                                "function__return",
-                                "php_return",
-                                "bpf_usdt_readarg(4, ctx, &clazz);",
-                                "bpf_usdt_readarg(1, ctx, &method);",
-                                "bpf_usdt_readarg(2, ctx, &file);",
-                                is_return=True)
+                                  "function__return",
+                                  "php_return",
+                                  "bpf_usdt_readarg(4, ctx, &clazz);",
+                                  "bpf_usdt_readarg(1, ctx, &method);",
+                                  "bpf_usdt_readarg(2, ctx, &file);",
+                                  is_return=True)
 
     # trace syscalls
     global e
     program += e.generate(pids)
     return program
 
+
 def main():
     # cli arguments
     parser = argparse.ArgumentParser(
         description="php_tool",
         formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("pid", type=int, nargs="+", help="process id to attach to")
+    parser.add_argument(
+        "pid",
+        type=int,
+        nargs="+",
+        help="process id to attach to")
     parser.add_argument(
         "--debug", action="store_true",
         help="debug mode: print the generated BPF program")
@@ -560,6 +575,7 @@ def main():
             bpf.perf_buffer_poll()
         except KeyboardInterrupt:
             exit()
+
 
 if __name__ == "__main__":
     main()
