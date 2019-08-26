@@ -206,8 +206,10 @@ def replace_syscall_logic(template, enter_logic, exit_logic):
 
 
 def event_read_on_fd(func):
-    # intercept when an open filedescriptor is read. get the fd for printing
-    # and get the type for sort the latence in NET or DISK
+    """
+    intercept when an open filedescriptor is read. get the fd for printing
+    and get the type for sort the latence in NET or DISK
+    """
     def wrapper(*args, **kwargs):
         template = func(*args)
         if args[0] == "read":
@@ -239,8 +241,10 @@ def event_read_on_fd(func):
 
 
 def event_write_on_fd(func):
-    # intercept when write on an open filedescriptor. get the fd for printing
-    # and get the type for sort the latence in NET or DISK
+    """
+    intercept when write on an open filedescriptor. get the fd for printing
+    and get the type for sort the latence in NET or DISK
+    """
     def wrapper(*args, **kwargs):
         template = func(*args)
         if args[0] == "write" or args[0] == "sendto" or args[0] == "sendmmsg":
@@ -272,8 +276,10 @@ def event_write_on_fd(func):
 
 
 def store_open_fds(func):
-    # store in a map the filedescriptors when open or socket open it.
-    # and store the type: NET or DISK
+    """
+    store in a map the filedescriptors when open or socket open it.
+    and store the type: NET or DISK
+    """
     def wrapper(*args, **kwargs):
         template = func(*args)
         if args[0] == "open" or args[0] == "openat" or args[0] == "creat":
@@ -302,7 +308,7 @@ def store_open_fds(func):
 
 
 def trace_connect_address(func):
-    # decorator for trace the address in the connect arg
+    "decorator for trace the address in the connect arg"
     def wrapper(*args, **kwargs):
         template = func(*args)
         if args[0] == "connect":
