@@ -6,6 +6,7 @@ import argparse
 import ctypes as ct
 import time
 import os
+import io
 import ipaddress
 import socket
 from collections import defaultdict
@@ -323,25 +324,28 @@ def print_event(pid, lat, message, depth):
 
 
 def syscall_message(event):
-    message = "sys." + BLUE + event.method.decode("utf-8", "replace") + ENDC
+    message = io.StringIO("sys.")
+    message.write(BLUE)
+    message.write(event.method.decode("utf-8", "replace"))
+    message.write(ENDC)
     if event.fdw > 0:
-        message += " write on fd: " + str(event.fdw)
+        message.write(" write on fd: %s" % event.fdw)
     if event.fdr > 0:
-        message += " read fd: " + str(event.fdr)
+        message.write(" read fd: %s" % event.fdr)
     if event.fd_ret > 0:
-        message += " return fd: " + str(event.fd_ret)
+        message.write(" return fd: %s" % event.fd_ret)
 
     if event.addr > 0:
         addr = str(ipaddress.ip_address(event.addr))
         rev = addr.split('.')[::-1]
         addr = '.'.join(rev)
-        message += " connect to: " + addr
+        message.write(" connect to: %s" % addr)
         try:
             host = socket.gethostbyaddr(addr)
-            message += " -> " + host[0]
+            message.write(" -> %s" % host[0])
         except socket.herror or socket.gaierror:
             pass
-    return message
+    return message.getvalue()
 
 # callback function for open_perf_buffer
 
