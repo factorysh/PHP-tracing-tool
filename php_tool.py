@@ -180,112 +180,6 @@ TRACEPOINT_PROBE(syscalls, sys_exit_{syscall_name}) {{
 class SyscallEvents:
     e = defaultdict(list)
 
-    def __init__(self):
-        # intercept when an open filedescriptor is read. get the fd for printing
-        # and get the type for sort the latence in NET or DISK
-        self.event(("read"), """
-                    u64 fdarg = args->fd;
-                    fd.update(&pid, &fdarg);
-
-                    """, \
-                    """
-                    data.bytes_read = args->ret;
-                    u64 *fdarg = fd.lookup(&pid);
-                    if (fdarg) {
-                        data.fdr = *fdarg;
-                        fd.delete(&pid);
-                        u64 *fdt = filedescriptors.lookup(fdarg);
-                        if (fdt) {
-                            data.fd_type = *fdt;
-                        }
-                    }
-
-                    """)
-
-        # intercept when write on an open filedescriptor. get the fd for printing
-        # and get the type for sort the latence in NET or DISK
-        self.event(("write", "sendto", "sendmsg"), """
-                    u64 fdarg = args->fd;
-                    fd.update(&pid, &fdarg);
-
-                    """, \
-                    """
-                    data.bytes_write = args->ret;
-                    u64 *fdarg = fd.lookup(&pid);
-                    if (fdarg) {
-                        data.fdw = *fdarg;
-                        fd.delete(&pid);
-                        u64 *fdt = filedescriptors.lookup(fdarg);
-                        if (fdt) {
-                            data.fd_type = *fdt;
-                        }
-                    }
-
-                    """)
-
-        # store in a map the filedescriptors when open or socket open it.
-        # and store the type: NET or DISK
-        self.event(("open", "openat", "creat"), "", """
-                    u64 ret = args->ret;
-                    u64 flag = DISK;
-                    filedescriptors.update(&ret, &flag);
-                    data.fd_ret = ret;
-
-                    """)
-
-        self.event(("socket"), "", """
-                    u64 ret = args->ret;
-                    u64 flag = NET;
-                    filedescriptors.update(&ret, &flag);
-                    data.fd_ret = ret;
-
-                    """)
-
-        # decorator for trace the address in the connect arg
-        self.event(("connect"), """
-                    struct sockaddr_in *useraddr = ((struct sockaddr_in *)(args->uservaddr));
-                    u64 a = useraddr->sin_addr.s_addr;
-                    addr.update(&pid, &a);
-                    u64 fdarg = args->fd;
-                    fd.update(&pid, &fdarg);
-
-                    """, \
-                    """
-                    u64 *a = addr.lookup(&pid);
-                    if (a) {
-                        data.addr = *a;
-                        addr.delete(&pid);
-                    }
-                    u64 *fdarg = fd.lookup(&pid);
-                    if (fdarg) {
-                        data.fdw = *fdarg;
-                        fd.delete(&pid);
-                    }
-
-                    """)
-
-        self.event(("bind"), """
-                    struct sockaddr_in *useraddr = ((struct sockaddr_in *)(args->umyaddr));
-                    u64 a = useraddr->sin_addr.s_addr;
-                    addr.update(&pid, &a);
-                    u64 fdarg = args->fd;
-                    fd.update(&pid, &fdarg);
-
-                    """, \
-                    """
-                    u64 *a = addr.lookup(&pid);
-                    if (a) {
-                        data.addr = *a;
-                        addr.delete(&pid);
-                    }
-                    u64 *fdarg = fd.lookup(&pid);
-                    if (fdarg) {
-                        data.fdw = *fdarg;
-                        fd.delete(&pid);
-                    }
-
-                    """)
-
     def event(self, syscalls, enter, exit):
         for syscall in syscalls:
             self.e[syscall].append((enter, exit))
@@ -501,7 +395,114 @@ def c_program(pids):
 
     program.write(php.generate(pids))
     # trace syscalls
-    program.write(SyscallEvents().generate(pids))
+
+    s = SyscallEvents()
+    # intercept when an open filedescriptor is read. get the fd for printing
+    # and get the type for sort the latence in NET or DISK
+    s.event(("read"), """
+                u64 fdarg = args->fd;
+                fd.update(&pid, &fdarg);
+
+                """, \
+                """
+                data.bytes_read = args->ret;
+                u64 *fdarg = fd.lookup(&pid);
+                if (fdarg) {
+                    data.fdr = *fdarg;
+                    fd.delete(&pid);
+                    u64 *fdt = filedescriptors.lookup(fdarg);
+                    if (fdt) {
+                        data.fd_type = *fdt;
+                    }
+                }
+
+                """)
+
+    # intercept when write on an open filedescriptor. get the fd for printing
+    # and get the type for sort the latence in NET or DISK
+    s.event(("write", "sendto", "sendmsg"), """
+                u64 fdarg = args->fd;
+                fd.update(&pid, &fdarg);
+
+                """, \
+                """
+                data.bytes_write = args->ret;
+                u64 *fdarg = fd.lookup(&pid);
+                if (fdarg) {
+                    data.fdw = *fdarg;
+                    fd.delete(&pid);
+                    u64 *fdt = filedescriptors.lookup(fdarg);
+                    if (fdt) {
+                        data.fd_type = *fdt;
+                    }
+                }
+
+                """)
+
+    # store in a map the filedescriptors when open or socket open it.
+    # and store the type: NET or DISK
+    s.event(("open", "openat", "creat"), "", """
+                u64 ret = args->ret;
+                u64 flag = DISK;
+                filedescriptors.update(&ret, &flag);
+                data.fd_ret = ret;
+
+                """)
+
+    s.event(("socket"), "", """
+                u64 ret = args->ret;
+                u64 flag = NET;
+                filedescriptors.update(&ret, &flag);
+                data.fd_ret = ret;
+
+                """)
+
+    # decorator for trace the address in the connect arg
+    s.event(("connect"), """
+                struct sockaddr_in *useraddr = ((struct sockaddr_in *)(args->uservaddr));
+                u64 a = useraddr->sin_addr.s_addr;
+                addr.update(&pid, &a);
+                u64 fdarg = args->fd;
+                fd.update(&pid, &fdarg);
+
+                """, \
+                """
+                u64 *a = addr.lookup(&pid);
+                if (a) {
+                    data.addr = *a;
+                    addr.delete(&pid);
+                }
+                u64 *fdarg = fd.lookup(&pid);
+                if (fdarg) {
+                    data.fdw = *fdarg;
+                    fd.delete(&pid);
+                }
+
+                """)
+
+    s.event(("bind"), """
+                struct sockaddr_in *useraddr = ((struct sockaddr_in *)(args->umyaddr));
+                u64 a = useraddr->sin_addr.s_addr;
+                addr.update(&pid, &a);
+                u64 fdarg = args->fd;
+                fd.update(&pid, &fdarg);
+
+                """, \
+                """
+                u64 *a = addr.lookup(&pid);
+                if (a) {
+                    data.addr = *a;
+                    addr.delete(&pid);
+                }
+                u64 *fdarg = fd.lookup(&pid);
+                if (fdarg) {
+                    data.fdw = *fdarg;
+                    fd.delete(&pid);
+                }
+
+                """)
+
+    program.write(s.generate(pids))
     return program.getvalue()
 
 
