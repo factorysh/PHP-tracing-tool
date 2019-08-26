@@ -19,7 +19,11 @@ net_read_volume = 0
 disk_read_volume = 0
 
 usdt_tab = []
-syscalls = ["socket", "socketpair", "bind", "listen", "accept", "accept4", "connect", "getsockname", "getpeername", "sendto", "recvfrom", "setsockopt", "getsockopt", "shutdown", "sendmsg", "sendmmsg", "recvmsg", "recvmmsg", "read", "write", "open", "openat", "creat", "close", "sendfile64"]
+syscalls = ["socket", "socketpair", "bind", "listen", "accept", "accept4",
+            "connect", "getsockname", "getpeername", "sendto", "recvfrom",
+            "setsockopt", "getsockopt", "shutdown", "sendmsg", "sendmmsg",
+            "recvmsg", "recvmmsg", "read", "write", "open", "openat", "creat",
+            "close", "sendfile64"]
 #syscalls = []
 
 SYSCALL = 1
@@ -31,6 +35,8 @@ UNDERLINE = '\033[4m'
 ENDC = '\033[0m'
 
 # C result class
+
+
 class CallEvent(ct.Structure):
     _fields_ = [
         ("depth", ct.c_ulonglong),
@@ -49,14 +55,21 @@ class CallEvent(ct.Structure):
         ("file", ct.c_char * 80),
         ]
 
+
 # cli arguments
 parser = argparse.ArgumentParser(
     description="php_tool",
     formatter_class=argparse.RawDescriptionHelpFormatter)
 parser.add_argument("pid", type=int, nargs="+", help="process id to attach to")
-parser.add_argument("--debug", action="store_true", help="debug mode: print the generated BPF program")
-parser.add_argument("--check", action="store_true", help="print the generated BPF program and quit")
-parser.add_argument("-S","--syscalls", action="store_true", help="print the syscalls details inside each function")
+parser.add_argument(
+    "--debug", action="store_true",
+    help="debug mode: print the generated BPF program")
+parser.add_argument(
+    "--check", action="store_true",
+    help="print the generated BPF program and quit")
+parser.add_argument(
+    "-S", "--syscalls", action="store_true",
+    help="print the syscalls details inside each function")
 
 args = parser.parse_args()
 
@@ -114,7 +127,7 @@ int {name}(struct pt_regs *ctx) {{
     bpf_probe_read_str(&data.method, sizeof(data.method), (void *)method);
     bpf_probe_read_str(&data.file, sizeof(data.file), (void *)file);
     u64 id = clazz + method + file;
-    
+
     data.type = FUNC;
     data.pid = pid;
     depth = entry.lookup_or_init(&data.pid, &zero);
@@ -174,7 +187,7 @@ TRACEPOINT_PROBE(syscalls, sys_exit_{syscall_name}) {{
         calls.perf_submit(args, &data, sizeof(data));
         return 0;
     }}
-    
+
     data.lat = bpf_ktime_get_ns() - *start_ns;
     SYSCALL_EXIT_LOGIC
     calls.perf_submit(args, &data, sizeof(data));
@@ -185,9 +198,12 @@ TRACEPOINT_PROBE(syscalls, sys_exit_{syscall_name}) {{
 ###############################################################################
 # DECORATORS
 ###############################################################################
+
+
 def replace_syscall_logic(template, enter_logic, exit_logic):
     return template.replace("SYSCALL_ENTER_LOGIC", enter_logic) \
             .replace("SYSCALL_EXIT_LOGIC", exit_logic)
+
 
 def event_read_on_fd(func):
     # intercept when an open filedescriptor is read. get the fd for printing
@@ -218,8 +234,9 @@ def event_read_on_fd(func):
         else:
             return template
         return template.replace("SYSCALL_ENTER_LOGIC", enter_logic) \
-                .replace("SYSCALL_EXIT_LOGIC", exit_logic)
+            .replace("SYSCALL_EXIT_LOGIC", exit_logic)
     return wrapper
+
 
 def event_write_on_fd(func):
     # intercept when write on an open filedescriptor. get the fd for printing
@@ -250,8 +267,9 @@ def event_write_on_fd(func):
         else:
             return template
         return template.replace("SYSCALL_ENTER_LOGIC", enter_logic) \
-                .replace("SYSCALL_EXIT_LOGIC", exit_logic)
+            .replace("SYSCALL_EXIT_LOGIC", exit_logic)
     return wrapper
+
 
 def store_open_fds(func):
     # store in a map the filedescriptors when open or socket open it.
@@ -278,8 +296,10 @@ def store_open_fds(func):
             """
         else:
             return template
-        return replace_syscall_logic(template, "SYSCALL_ENTER_LOGIC", exit_logic)
+        return replace_syscall_logic(
+            template, "SYSCALL_ENTER_LOGIC", exit_logic)
     return wrapper
+
 
 def trace_connect_address(func):
     # decorator for trace the address in the connect arg
@@ -338,6 +358,7 @@ def trace_connect_address(func):
         return replace_syscall_logic(template, enter_logic, exit_logic)
     return wrapper
 
+
 def minimal_decorator(func):
     def wrapper(*args, **kwargs):
         template = func(*args)
@@ -348,20 +369,24 @@ def minimal_decorator(func):
 # FUNCTIONS
 ###############################################################################
 
+
 def print_event(pid, lat, message, depth):
-    print("%-6d %-10s %-40s" % (pid, str(lat), (PADDING * (depth - 1)) + message))
+    print("%-6d %-10s %-40s" %
+          (pid, str(lat), (PADDING * (depth - 1)) + message))
 
 # callback function for open_perf_buffer
+
+
 def callback(cpu, data, size):
     global total_lat, total_net_time, total_disk_time, net_write_volume, disk_write_volume, net_read_volume, disk_read_volume
     event = ct.cast(data, ct.POINTER(CallEvent)).contents
     depth = event.depth & (~(1 << 63))
     # If the event is a syscall
     if event.type == SYSCALL:
-        
+
         # Add the syscall latency to the total lat
         total_lat += event.lat
-        
+
         # If the syscall manipulate a NET filedescriptor (a unix socket)
         if event.fd_type == NET:
             total_net_time += event.lat
@@ -378,11 +403,11 @@ def callback(cpu, data, size):
                 disk_write_volume += event.bytes_write
             elif event.bytes_read > 0:
                 disk_read_volume += event.bytes_read
-        
+
         # if there isn't the --syscalls option
         if not args.syscalls:
             return
-        
+
         # generate the syscall print message
         message = "sys." + BLUE + event.method.decode("utf-8", "replace") + ENDC
         # if the syscall write on a fd
@@ -413,7 +438,7 @@ def callback(cpu, data, size):
             event.lat,
             message,
             depth
-        )    
+        )
     # php function
     else:
         if event.depth & (1 << 63):
@@ -431,19 +456,15 @@ def callback(cpu, data, size):
             if syscalls and total_net_time > 0:
                 # the total net usage time
                 print_event(
-                        event.pid >> 32,
-                        total_net_time,
-                        BLUE + ("sys time spent on the network |-> %s bytes written, %s bytes read" % (str(net_write_volume), str(net_read_volume))) + ENDC,
-                        depth
-                )
+                    event.pid >> 32, total_net_time, BLUE + (
+                        "sys time spent on the network |-> %s bytes written, %s bytes read" %
+                        (str(net_write_volume), str(net_read_volume))) + ENDC, depth)
             if syscalls and total_disk_time > 0:
                 # the total disk usage time
                 print_event(
-                        event.pid >> 32,
-                        total_disk_time,
-                        BLUE + ("sys time spent on the disk |-> %s bytes written, %s bytes read" % (str(disk_write_volume), str(disk_read_volume))) + ENDC,
-                        depth
-                )
+                    event.pid >> 32, total_disk_time, BLUE + (
+                        "sys time spent on the disk |-> %s bytes written, %s bytes read" %
+                        (str(disk_write_volume), str(disk_read_volume))) + ENDC, depth)
                 # reset
                 total_lat = 0
                 total_net_lat = 0
@@ -459,19 +480,27 @@ def callback(cpu, data, size):
         print_event(
                 event.pid >> 32,
                 str(event.lat) if event.lat > 0 else "-",
-                direction + event.clazz.decode('utf-8', 'replace') + "." \
-                    + event.method.decode('utf-8', 'replace') + " " \
+                direction + event.clazz.decode('utf-8', 'replace') + "."
+                    + event.method.decode('utf-8', 'replace') + " "
                     + UNDERLINE + "from " + event.file + ENDC,
                 depth
             )
         # quit on the last main return
-        if event.depth & (1 << 63) and  event.method == "main" and depth == 1:
+        if event.depth & (1 << 63) and event.method == "main" and depth == 1:
             exit()
 
 # function for trace a php probe
-def generate_php_probe(probe_name, func_name, read_class, read_method, read_file, is_return):
+
+
+def generate_php_probe(
+        probe_name,
+        func_name,
+        read_class,
+        read_method,
+        read_file,
+        is_return):
     global program, php_trace_template, usdt
-    #if is_return:
+    # if is_return:
     #    program += "#define IS_RETURN 1"
     depth = "*depth + 1" if not is_return else "*depth | (1ULL << 63)"
     update = "++(*depth);" if not is_return else "if (*depth) --(*depth);"
@@ -490,6 +519,8 @@ def generate_php_probe(probe_name, func_name, read_class, read_method, read_file
     return php_trace_template.format(**values)
 
 # function for trace a syscall
+
+
 @minimal_decorator
 @trace_connect_address
 @event_write_on_fd
@@ -514,15 +545,20 @@ def generate_syscall_tracepoint(sys_name):
 
 # Generate the C program
 
+
 # trace php function entry and return
-program += generate_php_probe("function__entry", "php_entry",
-    "bpf_usdt_readarg(4, ctx, &clazz);",
-    "bpf_usdt_readarg(1, ctx, &method);",
-    "bpf_usdt_readarg(2, ctx, &file);", is_return=False)
-program += generate_php_probe("function__return", "php_return",
-    "bpf_usdt_readarg(4, ctx, &clazz);",
-    "bpf_usdt_readarg(1, ctx, &method);",
-    "bpf_usdt_readarg(2, ctx, &file);", is_return=True)
+program += generate_php_probe("function__entry",
+                              "php_entry",
+                              "bpf_usdt_readarg(4, ctx, &clazz);",
+                              "bpf_usdt_readarg(1, ctx, &method);",
+                              "bpf_usdt_readarg(2, ctx, &file);",
+                              is_return=False)
+program += generate_php_probe("function__return",
+                              "php_return",
+                              "bpf_usdt_readarg(4, ctx, &clazz);",
+                              "bpf_usdt_readarg(1, ctx, &method);",
+                              "bpf_usdt_readarg(2, ctx, &file);",
+                              is_return=True)
 
 # trace the syscalls in the list
 for sys in syscalls:
@@ -544,7 +580,7 @@ print("%-6s %-10s %s" % ("PID", "LAT", "METHOD"))
 
 # don't forget the page_cnt option for increase the ring buffer size
 bpf["calls"].open_perf_buffer(callback, page_cnt=8192)
-while 1:
+while True:
     try:
         bpf.perf_buffer_poll()
     except KeyboardInterrupt:
