@@ -56,23 +56,6 @@ class CallEvent(ct.Structure):
         ]
 
 
-# cli arguments
-parser = argparse.ArgumentParser(
-    description="php_tool",
-    formatter_class=argparse.RawDescriptionHelpFormatter)
-parser.add_argument("pid", type=int, nargs="+", help="process id to attach to")
-parser.add_argument(
-    "--debug", action="store_true",
-    help="debug mode: print the generated BPF program")
-parser.add_argument(
-    "--check", action="store_true",
-    help="print the generated BPF program and quit")
-parser.add_argument(
-    "-S", "--syscalls", action="store_true",
-    help="print the syscalls details inside each function")
-
-args = parser.parse_args()
-
 ###############################################################################
 # TEMPLATES
 ###############################################################################
@@ -533,13 +516,12 @@ def generate_php_probe(
 @event_write_on_fd
 @event_read_on_fd
 @store_open_fds
-def generate_syscall_tracepoint(sys_name):
-    global program
+def generate_syscall_tracepoint(sys_name, pids):
     # get the pid condition
     pid_condition = ""
-    for i, pid in enumerate(args.pid):
+    for i, pid in enumerate(pids):
         pid_condition += "pid >> 32 != %s" % (str(pid))
-        if i < len(args.pid) - 1:
+        if i < len(pids) - 1:
             pid_condition += " && "
     # template
     values = {
@@ -550,45 +532,68 @@ def generate_syscall_tracepoint(sys_name):
 
 ###############################################################################
 
-# Generate the C program
+
+def c_program(pids):
+    "Generate the C program"
+    # trace php function entry and return
+    program = generate_php_probe("function__entry",
+                                "php_entry",
+                                "bpf_usdt_readarg(4, ctx, &clazz);",
+                                "bpf_usdt_readarg(1, ctx, &method);",
+                                "bpf_usdt_readarg(2, ctx, &file);",
+                                is_return=False)
+    program += generate_php_probe("function__return",
+                                "php_return",
+                                "bpf_usdt_readarg(4, ctx, &clazz);",
+                                "bpf_usdt_readarg(1, ctx, &method);",
+                                "bpf_usdt_readarg(2, ctx, &file);",
+                                is_return=True)
+
+    # trace the syscalls in the list
+    for sys in syscalls:
+        program += generate_syscall_tracepoint(sys, pids)
+    return program
 
 
-# trace php function entry and return
-program += generate_php_probe("function__entry",
-                              "php_entry",
-                              "bpf_usdt_readarg(4, ctx, &clazz);",
-                              "bpf_usdt_readarg(1, ctx, &method);",
-                              "bpf_usdt_readarg(2, ctx, &file);",
-                              is_return=False)
-program += generate_php_probe("function__return",
-                              "php_return",
-                              "bpf_usdt_readarg(4, ctx, &clazz);",
-                              "bpf_usdt_readarg(1, ctx, &method);",
-                              "bpf_usdt_readarg(2, ctx, &file);",
-                              is_return=True)
+def main():
+    # cli arguments
+    parser = argparse.ArgumentParser(
+        description="php_tool",
+        formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("pid", type=int, nargs="+", help="process id to attach to")
+    parser.add_argument(
+        "--debug", action="store_true",
+        help="debug mode: print the generated BPF program")
+    parser.add_argument(
+        "--check", action="store_true",
+        help="print the generated BPF program and quit")
+    parser.add_argument(
+        "-S", "--syscalls", action="store_true",
+        help="print the syscalls details inside each function")
 
-# trace the syscalls in the list
-for sys in syscalls:
-    program += generate_syscall_tracepoint(sys)
+    args = parser.parse_args()
 
-# C PROGRAM READY!
+    program = c_program(args.pid)
+    # debug options
+    if args.check or args.debug:
+        print(program)
+        if args.check:
+            exit()
 
-# debug options
-if args.check or args.debug:
-    print(program)
-    if args.check:
-        exit()
+    # inject the C program generated in eBPF
+    bpf = BPF(text=program, usdt_contexts=usdt_tab)
 
-# inject the C program generated in eBPF
-bpf = BPF(text=program, usdt_contexts=usdt_tab)
+    print("php super tool, pid = %s... Ctrl-C to quit." % (args.pid))
+    print("%-6s %-10s %s" % ("PID", "LAT", "METHOD"))
 
-print("php super tool, pid = %s... Ctrl-C to quit." % (args.pid))
-print("%-6s %-10s %s" % ("PID", "LAT", "METHOD"))
+    # don't forget the page_cnt option for increase the ring buffer size
+    bpf["calls"].open_perf_buffer(callback, page_cnt=8192)
+    while True:
+        try:
+            bpf.perf_buffer_poll()
+        except KeyboardInterrupt:
+            exit()
 
-# don't forget the page_cnt option for increase the ring buffer size
-bpf["calls"].open_perf_buffer(callback, page_cnt=8192)
-while True:
-    try:
-        bpf.perf_buffer_poll()
-    except KeyboardInterrupt:
-        exit()
+
+if __name__ == "__main__":
+    main()
