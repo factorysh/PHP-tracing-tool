@@ -172,10 +172,6 @@ TRACEPOINT_PROBE(syscalls, sys_exit_{syscall_name}) {{
 }}
 """
 
-###############################################################################
-# DECORATORS
-###############################################################################
-
 
 class SyscallEvents:
     e = defaultdict(list)
@@ -204,11 +200,6 @@ class SyscallEvents:
             global SYSCALLS
             syscalls = SYSCALLS
         return "".join(self.syscall(pids, syscall) for syscall in syscalls)
-
-
-###############################################################################
-# FUNCTIONS
-###############################################################################
 
 
 def print_event(pid, lat, message, depth):
@@ -340,9 +331,6 @@ class Callback:
             if event.depth & (
                     1 << 63) and event.method == "main" and depth == 1:
                 exit()
-
-
-###############################################################################
 
 
 class PHPEvents:
