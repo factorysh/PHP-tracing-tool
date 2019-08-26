@@ -255,6 +255,15 @@ class Callback:
     def __init__(self, args):
         self.args = args
 
+    def reset(self):
+        self.total_lat = 0
+        self.total_net_lat = 0
+        self.total_disk_lat = 0
+        self.net_write_volume = 0
+        self.disk_write_volume = 0
+        self.net_read_volume = 0
+        self.disk_read_volume = 0
+
     def __call__(self, cpu, data, size):
         event = ct.cast(data, ct.POINTER(CallEvent)).contents
         depth = event.depth & (~(1 << 63))
@@ -314,13 +323,7 @@ class Callback:
                                 (self.disk_write_volume, self.disk_read_volume)) + ENDC, depth)
 
                     # reset counters
-                    self.total_lat = 0
-                    self.total_net_lat = 0
-                    self.total_disk_lat = 0
-                    self.net_write_volume = 0
-                    self.disk_write_volume = 0
-                    self.net_read_volume = 0
-                    self.disk_read_volume = 0
+                    self.reset()
             # Entry function case
             else:
                 direction = "-> "
