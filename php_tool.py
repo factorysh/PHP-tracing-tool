@@ -319,14 +319,13 @@ class Callback:
             else:
                 direction = "-> "
 
-            print_event(
-                    event.pid >> 32,
-                    str(event.lat) if event.lat > 0 else "-",
-                    direction + event.clazz.decode('utf-8', 'replace') + "."
-                        + event.method.decode('utf-8', 'replace') + " "
-                        + UNDERLINE + "from " + event.file + ENDC,
-                    depth
-                )
+            print_event(event.pid >> 32,
+                        str(event.lat) if event.lat > 0 else "-",
+                        "".join((direction,
+                                 event.clazz.decode('utf-8', 'replace'),
+                                 ".", event.method.decode('utf-8', 'replace'),
+                                 " ", UNDERLINE, "from ",  event.file, ENDC)),
+                        depth)
             # Quit the program on the last main return
             if event.depth & (
                     1 << 63) and event.method == "main" and depth == 1:
