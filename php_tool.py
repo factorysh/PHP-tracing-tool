@@ -61,7 +61,7 @@ class CallEvent(ct.Structure):
 ###############################################################################
 
 # program template
-program = """
+PROGRAM = """
 #include <uapi/linux/ip.h>
 #include <uapi/linux/in.h>
 
@@ -535,6 +535,8 @@ def generate_syscall_tracepoint(sys_name, pids):
 
 def c_program(pids):
     "Generate the C program"
+    global PROGRAM
+    program = PROGRAM
     # trace php function entry and return
     program = generate_php_probe("function__entry",
                                 "php_entry",
