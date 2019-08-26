@@ -8,6 +8,7 @@ import time
 import os
 import ipaddress
 import socket
+from collections import defaultdict
 
 # globals
 total_lat = 0
@@ -19,7 +20,7 @@ net_read_volume = 0
 disk_read_volume = 0
 
 usdt_tab = []
-syscalls = ["socket", "socketpair", "bind", "listen", "accept", "accept4",
+SYSCALLS = ["socket", "socketpair", "bind", "listen", "accept", "accept4",
             "connect", "getsockname", "getpeername", "sendto", "recvfrom",
             "setsockopt", "getsockopt", "shutdown", "sendmsg", "sendmmsg",
             "recvmsg", "recvmmsg", "read", "write", "open", "openat", "creat",
@@ -137,7 +138,7 @@ int {name}(struct pt_regs *ctx) {{
 """
 
 # syscall tracepoint template
-sys_trace_template = """
+SYS_TRACE_TEMPLATE = """
 TRACEPOINT_PROBE(syscalls, sys_enter_{syscall_name}) {{
     u64 pid = bpf_get_current_pid_tgid();
     if ({pid_condition}) {{
@@ -145,7 +146,7 @@ TRACEPOINT_PROBE(syscalls, sys_enter_{syscall_name}) {{
     }}
     u64 time = bpf_ktime_get_ns();
     start.update(&pid, &time);
-    SYSCALL_ENTER_LOGIC
+    {syscall_enter_logic}
     return 0;
 }}
 
@@ -172,7 +173,7 @@ TRACEPOINT_PROBE(syscalls, sys_exit_{syscall_name}) {{
     }}
 
     data.lat = bpf_ktime_get_ns() - *start_ns;
-    SYSCALL_EXIT_LOGIC
+    {syscall_exit_logic}
     calls.perf_submit(args, &data, sizeof(data));
     return 0;
 }}
@@ -183,26 +184,54 @@ TRACEPOINT_PROBE(syscalls, sys_exit_{syscall_name}) {{
 ###############################################################################
 
 
-def replace_syscall_logic(template, enter_logic, exit_logic):
-    return template.replace("SYSCALL_ENTER_LOGIC", enter_logic) \
-            .replace("SYSCALL_EXIT_LOGIC", exit_logic)
+class SyscallEvents:
+    e = defaultdict(list)
+
+    def event(self, *syscalls):
+        def wrapper(func):
+            for syscall in syscalls:
+                self.e[syscall].append(func)
+            return func
+        return wrapper
+
+    def plugin(self, syscall):
+        return ("".join(a()[0] for a in self.e[syscall]),
+                "".join(a()[1] for a in self.e[syscall]))
+
+    def pid_condition(self, pids):
+        return " && ".join("pid >> 32 != %s" % str(pid) for pid in pids)
+
+    def syscall(self, pids, syscall):
+        enter, exit = self.plugin(syscall)
+        return SYS_TRACE_TEMPLATE.format(syscall_name=syscall,
+                                         pid_condition=self.pid_condition(pids),
+                                         syscall_enter_logic=enter,
+                                         syscall_exit_logic=exit
+                                         )
+
+    def generate(self, pids, syscalls=None):
+        if syscalls is None:
+            global SYSCALLS
+            sysacalls = SYSCALLS
+        return "".join(self.syscall(pids, syscall) for syscall in syscalls)
 
 
-def event_read_on_fd(func):
+
+e = SyscallEvents()
+event = e.event
+
+@event("read")
+def event_read_on_fd():
     """
     intercept when an open filedescriptor is read. get the fd for printing
     and get the type for sort the latence in NET or DISK
     """
-    def wrapper(*args, **kwargs):
-        template = func(*args)
-        if args[0] == "read":
-            enter_logic = """
+    return """
             u64 fdarg = args->fd;
             fd.update(&pid, &fdarg);
 
-            SYSCALL_ENTER_LOGIC
+            """, \
             """
-            exit_logic = """
             data.bytes_read = args->ret;
             u64 *fdarg = fd.lookup(&pid);
             if (fdarg) {
@@ -214,30 +243,20 @@ def event_read_on_fd(func):
                 }
             }
 
-            SYSCALL_EXIT_LOGIC
             """
-        else:
-            return template
-        return template.replace("SYSCALL_ENTER_LOGIC", enter_logic) \
-            .replace("SYSCALL_EXIT_LOGIC", exit_logic)
-    return wrapper
 
-
-def event_write_on_fd(func):
+@event("write", "sendto", "sendmsg")
+def event_write_on_fd():
     """
     intercept when write on an open filedescriptor. get the fd for printing
     and get the type for sort the latence in NET or DISK
     """
-    def wrapper(*args, **kwargs):
-        template = func(*args)
-        if args[0] == "write" or args[0] == "sendto" or args[0] == "sendmmsg":
-            enter_logic = """
+    return """
             u64 fdarg = args->fd;
             fd.update(&pid, &fdarg);
 
-            SYSCALL_ENTER_LOGIC
+            """ , \
             """
-            exit_logic = """
             data.bytes_write = args->ret;
             u64 *fdarg = fd.lookup(&pid);
             if (fdarg) {
@@ -249,62 +268,47 @@ def event_write_on_fd(func):
                 }
             }
 
-            SYSCALL_EXIT_LOGIC
             """
-        else:
-            return template
-        return template.replace("SYSCALL_ENTER_LOGIC", enter_logic) \
-            .replace("SYSCALL_EXIT_LOGIC", exit_logic)
-    return wrapper
 
 
-def store_open_fds(func):
+@event("open", "openat", "creat")
+def store_open_disk_fds():
     """
     store in a map the filedescriptors when open or socket open it.
     and store the type: NET or DISK
     """
-    def wrapper(*args, **kwargs):
-        template = func(*args)
-        if args[0] == "open" or args[0] == "openat" or args[0] == "creat":
-            exit_logic = """
+    return "", """
             u64 ret = args->ret;
             u64 flag = DISK;
             filedescriptors.update(&ret, &flag);
             data.fd_ret = ret;
 
-            SYSCALL_EXIT_LOGIC
             """
-        elif args[0] == "socket":
-            exit_logic = """
+
+
+@event("socket")
+def store_open_socket_fds():
+    return "", """
             u64 ret = args->ret;
             u64 flag = NET;
             filedescriptors.update(&ret, &flag);
             data.fd_ret = ret;
 
-            SYSCALL_EXIT_LOGIC
             """
-        else:
-            return template
-        return replace_syscall_logic(
-            template, "SYSCALL_ENTER_LOGIC", exit_logic)
-    return wrapper
 
 
-def trace_connect_address(func):
+@event("connect")
+def trace_connect_address():
     "decorator for trace the address in the connect arg"
-    def wrapper(*args, **kwargs):
-        template = func(*args)
-        if args[0] == "connect":
-            enter_logic = """
+    return """
             struct sockaddr_in *useraddr = ((struct sockaddr_in *)(args->uservaddr));
             u64 a = useraddr->sin_addr.s_addr;
             addr.update(&pid, &a);
             u64 fdarg = args->fd;
             fd.update(&pid, &fdarg);
 
-            SYSCALL_ENTER_LOGIC
+            """, \
             """
-            exit_logic = """
             u64 *a = addr.lookup(&pid);
             if (a) {
                 data.addr = *a;
@@ -316,19 +320,19 @@ def trace_connect_address(func):
                 fd.delete(&pid);
             }
 
-            SYSCALL_EXIT_LOGIC
             """
-        elif args[0] == "bind":
-            enter_logic = """
+
+@event("bind")
+def trace_bind_address():
+    return  """
             struct sockaddr_in *useraddr = ((struct sockaddr_in *)(args->umyaddr));
             u64 a = useraddr->sin_addr.s_addr;
             addr.update(&pid, &a);
             u64 fdarg = args->fd;
             fd.update(&pid, &fdarg);
 
-            SYSCALL_ENTER_LOGIC
+            """, \
             """
-            exit_logic = """
             u64 *a = addr.lookup(&pid);
             if (a) {
                 data.addr = *a;
@@ -340,19 +344,8 @@ def trace_connect_address(func):
                 fd.delete(&pid);
             }
 
-            SYSCALL_EXIT_LOGIC
             """
-        else:
-            return template
-        return replace_syscall_logic(template, enter_logic, exit_logic)
-    return wrapper
 
-
-def minimal_decorator(func):
-    def wrapper(*args, **kwargs):
-        template = func(*args)
-        return replace_syscall_logic(template, "", "")
-    return wrapper
 
 ###############################################################################
 # FUNCTIONS
