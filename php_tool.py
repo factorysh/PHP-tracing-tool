@@ -372,7 +372,7 @@ def syscall_message(event):
             host = socket.gethostbyaddr(addr)
             message += " -> " + host[0]
         except socket.herror or socket.gaierror:
-            pass 
+            pass
     return message
 
 # callback function for open_perf_buffer
@@ -387,18 +387,18 @@ def mycallback(args):
             if event.fd_type == NET:
                 global total_net_time
                 total_net_time += event.lat
-                
+
                 if event.bytes_write > 0:
                     global net_write_volume
                     net_write_volume += event.bytes_write
                 elif event.bytes_read > 0:
                     global net_read_volume
                     net_read_volume += event.bytes_read
-            
+
             elif event.fd_type == DISK:
                 global total_disk_time
                 total_disk_time += event.lat
-                
+
                 if event.bytes_write > 0:
                     global disk_write_volume
                     disk_write_volume += event.bytes_write
@@ -415,12 +415,12 @@ def mycallback(args):
                 syscall_message(event),
                 depth
             )
-        
+
         else:
             # Return function case
             if event.depth & (1 << 63):
                 direction = "<- "
-                
+
                 if SYSCALLS:
                     if total_lat > 0:
                         print_event(
@@ -435,13 +435,13 @@ def mycallback(args):
                             event.pid >> 32, total_net_time, BLUE + (
                                 "sys time spent on the network |-> %s bytes written, %s bytes read" %
                                 (str(net_write_volume), str(net_read_volume))) + ENDC, depth)
-                    
+
                     if total_disk_time > 0:
                         print_event(
                             event.pid >> 32, total_disk_time, BLUE + (
                                 "sys time spent on the disk |-> %s bytes written, %s bytes read" %
                                 (str(disk_write_volume), str(disk_read_volume))) + ENDC, depth)
-                    
+
                     # reset counters
                     total_lat = 0
                     total_net_lat = 0
@@ -453,7 +453,7 @@ def mycallback(args):
             # Entry function case
             else:
                 direction = "-> "
-            
+
             print_event(
                     event.pid >> 32,
                     str(event.lat) if event.lat > 0 else "-",
@@ -465,7 +465,7 @@ def mycallback(args):
             # Quit the program on the last main return
             if event.depth & (1 << 63) and event.method == "main" and depth == 1:
                 exit()
-    
+
     return callback
 
 def generate_php_probe(
@@ -501,7 +501,7 @@ def c_program(pids):
     "Generate the C program"
     global PROGRAM
     program = PROGRAM
-    
+
     program += generate_php_probe(pids,
                                 "function__entry",
                                 "php_entry",
