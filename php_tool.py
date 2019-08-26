@@ -11,13 +11,6 @@ import socket
 from collections import defaultdict
 
 # globals
-total_lat = 0
-total_net_time = 0
-total_disk_time = 0
-net_write_volume = 0
-disk_write_volume = 0
-net_read_volume = 0
-disk_read_volume = 0
 
 USDT_TAB = []
 SYSCALLS = ["socket", "socketpair", "bind", "listen", "accept", "accept4",
@@ -383,37 +376,41 @@ def syscall_message(event):
 # callback function for open_perf_buffer
 
 
-def mycallback(args):
-    def callback(cpu, data, size):
+class Callback:
+    total_lat = 0
+    total_net_time = 0
+    total_disk_time = 0
+    net_write_volume = 0
+    disk_write_volume = 0
+    net_read_volume = 0
+    disk_read_volume = 0
+
+    def __init__(self, args):
+        self.args = args
+
+    def __call__(self, cpu, data, size):
         event = ct.cast(data, ct.POINTER(CallEvent)).contents
         depth = event.depth & (~(1 << 63))
         if event.type == SYSCALL:
-            global total_lat
-            total_lat += event.lat
+            self.total_lat += event.lat
 
             if event.fd_type == NET:
-                global total_net_time
-                total_net_time += event.lat
+                self.total_net_time += event.lat
 
                 if event.bytes_write > 0:
-                    global net_write_volume
-                    net_write_volume += event.bytes_write
+                    self.net_write_volume += event.bytes_write
                 elif event.bytes_read > 0:
-                    global net_read_volume
-                    net_read_volume += event.bytes_read
+                    self.net_read_volume += event.bytes_read
 
             elif event.fd_type == DISK:
-                global total_disk_time
-                total_disk_time += event.lat
+                self.total_disk_time += event.lat
 
                 if event.bytes_write > 0:
-                    global disk_write_volume
-                    disk_write_volume += event.bytes_write
+                    self.disk_write_volume += event.bytes_write
                 elif event.bytes_read > 0:
-                    global disk_read_volume
-                    disk_read_volume += event.bytes_read
+                    self.disk_read_volume += event.bytes_read
 
-            if not args.syscalls:
+            if not self.args.syscalls:
                 return
 
             print_event(
@@ -429,7 +426,7 @@ def mycallback(args):
                 direction = "<- "
 
                 if SYSCALLS:
-                    if total_lat > 0:
+                    if self.total_lat > 0:
                         print_event(
                                 event.pid >> 32,
                                 total_lat,
@@ -437,26 +434,26 @@ def mycallback(args):
                                 depth
                         )
 
-                    if total_net_time > 0:
+                    if self.total_net_time > 0:
                         print_event(
-                            event.pid >> 32, total_net_time, BLUE + (
-                                "sys time spent on the network |-> %s bytes written, %s bytes read" %
-                                (str(net_write_volume), str(net_read_volume))) + ENDC, depth)
+                            event.pid >> 32, self.total_net_time, BLUE + (
+                                "sys time spent on the network |-> %d bytes written, %d bytes read" %
+                                (self.net_write_volume, self.net_read_volume)) + ENDC, depth)
 
-                    if total_disk_time > 0:
+                    if self.total_disk_time > 0:
                         print_event(
-                            event.pid >> 32, total_disk_time, BLUE + (
-                                "sys time spent on the disk |-> %s bytes written, %s bytes read" %
-                                (str(disk_write_volume), str(disk_read_volume))) + ENDC, depth)
+                            event.pid >> 32, self.total_disk_time, BLUE + (
+                                "sys time spent on the disk |-> %d bytes written, %d bytes read" %
+                                (self.disk_write_volume, self.disk_read_volume)) + ENDC, depth)
 
                     # reset counters
-                    total_lat = 0
-                    total_net_lat = 0
-                    total_disk_lat = 0
-                    net_write_volume = 0
-                    disk_write_volume = 0
-                    net_read_volume = 0
-                    disk_read_volume = 0
+                    self.total_lat = 0
+                    self.total_net_lat = 0
+                    self.total_disk_lat = 0
+                    self.net_write_volume = 0
+                    self.disk_write_volume = 0
+                    self.net_read_volume = 0
+                    self.disk_read_volume = 0
             # Entry function case
             else:
                 direction = "-> "
@@ -473,8 +470,6 @@ def mycallback(args):
             if event.depth & (
                     1 << 63) and event.method == "main" and depth == 1:
                 exit()
-
-    return callback
 
 
 def generate_php_probe(
@@ -569,7 +564,7 @@ def main():
     print("%-6s %-10s %s" % ("PID", "LAT", "METHOD"))
 
     # don't forget the page_cnt option for increase the ring buffer size
-    bpf["calls"].open_perf_buffer(mycallback(args), page_cnt=8192)
+    bpf["calls"].open_perf_buffer(Callback(args), page_cnt=8192)
     while True:
         try:
             bpf.perf_buffer_poll()
