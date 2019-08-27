@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 
 from __future__ import print_function
 from bcc import BPF, USDT
@@ -208,7 +208,8 @@ def print_event(pid, lat, message, depth):
 
 
 def syscall_message(event):
-    message = io.StringIO("sys.")
+    message = io.StringIO()
+    message.write("sys.")
     message.write(BLUE)
     message.write(event.method.decode("utf-8", "replace"))
     message.write(ENDC)
@@ -324,20 +325,19 @@ class Callback:
                         "".join((direction,
                                  event.clazz.decode('utf-8', 'replace'),
                                  ".", event.method.decode('utf-8', 'replace'),
-                                 " ", UNDERLINE, "from ",  event.file, ENDC)),
+                                 " ", UNDERLINE, "from ",  event.file.decode('utf-8', 'replace'), ENDC)),
                         depth)
             # Quit the program on the last main return
-            if event.depth & (
-                    1 << 63) and event.method == "main" and depth == 1:
+            if event.depth & (1 << 63) and event.method.decode('utf-8', 'replace') == "main" and depth == 1:
                 exit()
 
 
 class PHPEvents:
-    usdt = []
+    usdt_tab = []
     txt = []
     probes = []
 
-    def probe(self, probe_name, func_name, read_class, read_method,
+    def probe(self, pids, probe_name, func_name, read_class, read_method,
               read_file, is_return=False):
         "Generate the c for php probes"
         depth = "*depth + 1" if not is_return else "*depth | (1ULL << 63)"
@@ -358,14 +358,14 @@ class PHPEvents:
             for pid in pids:
                 usdt = USDT(pid=pid)
                 usdt.enable_probe_or_bail(probe_name, func_name)
-                self.usdt.append(usdt)
+                self.usdt_tab.append(usdt)
         return "".join(self.txt)
 
 
 def c_program(pids):
     "Generate the C program"
-    program = io.StringIO(PROGRAM)
-
+    program = io.StringIO()
+    program.write(PROGRAM)
     php = PHPEvents()
 
     php.probe(pids,
@@ -389,7 +389,7 @@ def c_program(pids):
     s = SyscallEvents()
     # intercept when an open filedescriptor is read. get the fd for printing
     # and get the type for sort the latence in NET or DISK
-    s.event(("read"), """
+    s.event(("read",), """
                 u64 fdarg = args->fd;
                 fd.update(&pid, &fdarg);
 
@@ -439,7 +439,7 @@ def c_program(pids):
 
                 """)
 
-    s.event(("socket"), "", """
+    s.event(("socket",), "", """
                 u64 ret = args->ret;
                 u64 flag = NET;
                 filedescriptors.update(&ret, &flag);
@@ -448,7 +448,7 @@ def c_program(pids):
                 """)
 
     # decorator for trace the address in the connect arg
-    s.event(("connect"), """
+    s.event(("connect",), """
                 struct sockaddr_in *useraddr = ((struct sockaddr_in *)(args->uservaddr));
                 u64 a = useraddr->sin_addr.s_addr;
                 addr.update(&pid, &a);
@@ -470,7 +470,7 @@ def c_program(pids):
 
                 """)
 
-    s.event(("bind"), """
+    s.event(("bind",), """
                 struct sockaddr_in *useraddr = ((struct sockaddr_in *)(args->umyaddr));
                 u64 a = useraddr->sin_addr.s_addr;
                 addr.update(&pid, &a);
@@ -493,7 +493,7 @@ def c_program(pids):
                 """)
 
     program.write(s.generate(pids))
-    return program.getvalue()
+    return program.getvalue(), php.usdt_tab
 
 
 def main():
@@ -517,7 +517,7 @@ def main():
         help="print the syscalls details inside each function")
     args = parser.parse_args()
 
-    program = c_program(args.pid)
+    program, usdt_tab = c_program(args.pid)
 
     # debug options
     if args.check or args.debug:
@@ -526,7 +526,7 @@ def main():
             exit()
 
     # inject the C program generated in eBPF
-    bpf = BPF(text=program, usdt_contexts=USDT_TAB)
+    bpf = BPF(text=program, usdt_contexts=usdt_tab)
 
     print("php super tool, pid = %s... Ctrl-C to quit." % (args.pid))
     print("%-6s %-10s %s" % ("PID", "LAT", "METHOD"))

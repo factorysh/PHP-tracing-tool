@@ -3,9 +3,6 @@
 all: demo-php-app
 	make -C demo-php-app up
 
-bcc-image:
-	docker build -t bcc-demo .
-
 php-debug-image:
 	make -C php-debug-image
 
