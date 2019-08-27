@@ -14,3 +14,6 @@ demo-php-app: php-debug-image
 
 demo-wordpress: wordpress-debug-image
 	make -C demo-wordpress
+
+vagrant:
+	vagrant up
