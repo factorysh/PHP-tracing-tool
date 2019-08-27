@@ -6,13 +6,13 @@ import argparse
 import ctypes as ct
 import time
 import os
+import io
 import ipaddress
 import socket
 from collections import defaultdict
 
 # globals
 
-USDT_TAB = []
 SYSCALLS = ["socket", "socketpair", "bind", "listen", "accept", "accept4",
             "connect", "getsockname", "getpeername", "sendto", "recvfrom",
             "setsockopt", "getsockopt", "shutdown", "sendmsg", "sendmmsg",
@@ -172,24 +172,17 @@ TRACEPOINT_PROBE(syscalls, sys_exit_{syscall_name}) {{
 }}
 """
 
-###############################################################################
-# DECORATORS
-###############################################################################
-
 
 class SyscallEvents:
     e = defaultdict(list)
 
-    def event(self, *syscalls):
-        def wrapper(func):
-            for syscall in syscalls:
-                self.e[syscall].append(func)
-            return func
-        return wrapper
+    def event(self, syscalls, enter, exit):
+        for syscall in syscalls:
+            self.e[syscall].append((enter, exit))
 
     def plugin(self, syscall):
-        return ("".join(a()[0] for a in self.e[syscall]),
-                "".join(a()[1] for a in self.e[syscall]))
+        return ("".join(a[0] for a in self.e[syscall]),
+                "".join(a[1] for a in self.e[syscall]))
 
     def pid_condition(self, pids):
         return " && ".join("pid >> 32 != %s" % str(pid) for pid in pids)
@@ -209,169 +202,34 @@ class SyscallEvents:
         return "".join(self.syscall(pids, syscall) for syscall in syscalls)
 
 
-e = SyscallEvents()
-event = e.event
-
-
-@event("read")
-def event_read_on_fd():
-    """
-    intercept when an open filedescriptor is read. get the fd for printing
-    and get the type for sort the latence in NET or DISK
-    """
-    return """
-            u64 fdarg = args->fd;
-            fd.update(&pid, &fdarg);
-
-            """, \
-            """
-            data.bytes_read = args->ret;
-            u64 *fdarg = fd.lookup(&pid);
-            if (fdarg) {
-                data.fdr = *fdarg;
-                fd.delete(&pid);
-                u64 *fdt = filedescriptors.lookup(fdarg);
-                if (fdt) {
-                    data.fd_type = *fdt;
-                }
-            }
-
-            """
-
-
-@event("write", "sendto", "sendmsg")
-def event_write_on_fd():
-    """
-    intercept when write on an open filedescriptor. get the fd for printing
-    and get the type for sort the latence in NET or DISK
-    """
-    return """
-            u64 fdarg = args->fd;
-            fd.update(&pid, &fdarg);
-
-            """, \
-            """
-            data.bytes_write = args->ret;
-            u64 *fdarg = fd.lookup(&pid);
-            if (fdarg) {
-                data.fdw = *fdarg;
-                fd.delete(&pid);
-                u64 *fdt = filedescriptors.lookup(fdarg);
-                if (fdt) {
-                    data.fd_type = *fdt;
-                }
-            }
-
-            """
-
-
-@event("open", "openat", "creat")
-def store_open_disk_fds():
-    """
-    store in a map the filedescriptors when open or socket open it.
-    and store the type: NET or DISK
-    """
-    return "", """
-            u64 ret = args->ret;
-            u64 flag = DISK;
-            filedescriptors.update(&ret, &flag);
-            data.fd_ret = ret;
-
-            """
-
-
-@event("socket")
-def store_open_socket_fds():
-    return "", """
-            u64 ret = args->ret;
-            u64 flag = NET;
-            filedescriptors.update(&ret, &flag);
-            data.fd_ret = ret;
-
-            """
-
-
-@event("connect")
-def trace_connect_address():
-    "decorator for trace the address in the connect arg"
-    return """
-            struct sockaddr_in *useraddr = ((struct sockaddr_in *)(args->uservaddr));
-            u64 a = useraddr->sin_addr.s_addr;
-            addr.update(&pid, &a);
-            u64 fdarg = args->fd;
-            fd.update(&pid, &fdarg);
-
-            """, \
-            """
-            u64 *a = addr.lookup(&pid);
-            if (a) {
-                data.addr = *a;
-                addr.delete(&pid);
-            }
-            u64 *fdarg = fd.lookup(&pid);
-            if (fdarg) {
-                data.fdw = *fdarg;
-                fd.delete(&pid);
-            }
-
-            """
-
-
-@event("bind")
-def trace_bind_address():
-    return """
-            struct sockaddr_in *useraddr = ((struct sockaddr_in *)(args->umyaddr));
-            u64 a = useraddr->sin_addr.s_addr;
-            addr.update(&pid, &a);
-            u64 fdarg = args->fd;
-            fd.update(&pid, &fdarg);
-
-            """, \
-            """
-            u64 *a = addr.lookup(&pid);
-            if (a) {
-                data.addr = *a;
-                addr.delete(&pid);
-            }
-            u64 *fdarg = fd.lookup(&pid);
-            if (fdarg) {
-                data.fdw = *fdarg;
-                fd.delete(&pid);
-            }
-
-            """
-
-
-###############################################################################
-# FUNCTIONS
-###############################################################################
-
-
 def print_event(pid, lat, message, depth):
     print("%-6d %-10s %-40s" %
           (pid, str(lat), (PADDING * (depth - 1)) + message))
 
 
 def syscall_message(event):
-    message = "sys." + BLUE + event.method.decode("utf-8", "replace") + ENDC
+    message = io.StringIO("sys.")
+    message.write(BLUE)
+    message.write(event.method.decode("utf-8", "replace"))
+    message.write(ENDC)
     if event.fdw > 0:
-        message += " write on fd: " + str(event.fdw)
+        message.write(" write on fd: %s" % event.fdw)
     if event.fdr > 0:
-        message += " read fd: " + str(event.fdr)
+        message.write(" read fd: %s" % event.fdr)
     if event.fd_ret > 0:
-        message += " return fd: " + str(event.fd_ret)
+        message.write(" return fd: %s" % event.fd_ret)
 
     if event.addr > 0:
         addr = str(ipaddress.ip_address(event.addr))
         rev = addr.split('.')[::-1]
         addr = '.'.join(rev)
-        message += " connect to: " + addr
+        message.write(" connect to: %s" % addr)
         try:
             host = socket.gethostbyaddr(addr)
-            message += " -> " + host[0]
+            message.write(" -> %s" % host[0])
         except socket.herror or socket.gaierror:
             pass
-    return message
+    return message.getvalue()
 
 # callback function for open_perf_buffer
 
@@ -387,6 +245,15 @@ class Callback:
 
     def __init__(self, args):
         self.args = args
+
+    def reset(self):
+        self.total_lat = 0
+        self.total_net_lat = 0
+        self.total_disk_lat = 0
+        self.net_write_volume = 0
+        self.disk_write_volume = 0
+        self.net_read_volume = 0
+        self.disk_read_volume = 0
 
     def __call__(self, cpu, data, size):
         event = ct.cast(data, ct.POINTER(CallEvent)).contents
@@ -447,85 +314,186 @@ class Callback:
                                 (self.disk_write_volume, self.disk_read_volume)) + ENDC, depth)
 
                     # reset counters
-                    self.total_lat = 0
-                    self.total_net_lat = 0
-                    self.total_disk_lat = 0
-                    self.net_write_volume = 0
-                    self.disk_write_volume = 0
-                    self.net_read_volume = 0
-                    self.disk_read_volume = 0
+                    self.reset()
             # Entry function case
             else:
                 direction = "-> "
 
-            print_event(
-                    event.pid >> 32,
-                    str(event.lat) if event.lat > 0 else "-",
-                    direction + event.clazz.decode('utf-8', 'replace') + "."
-                        + event.method.decode('utf-8', 'replace') + " "
-                        + UNDERLINE + "from " + event.file + ENDC,
-                    depth
-                )
+            print_event(event.pid >> 32,
+                        str(event.lat) if event.lat > 0 else "-",
+                        "".join((direction,
+                                 event.clazz.decode('utf-8', 'replace'),
+                                 ".", event.method.decode('utf-8', 'replace'),
+                                 " ", UNDERLINE, "from ",  event.file, ENDC)),
+                        depth)
             # Quit the program on the last main return
             if event.depth & (
                     1 << 63) and event.method == "main" and depth == 1:
                 exit()
 
 
-def generate_php_probe(
-        pids,
-        probe_name,
-        func_name,
-        read_class,
-        read_method,
-        read_file,
-        is_return):
-    "Generate the c for php probes"
-    depth = "*depth + 1" if not is_return else "*depth | (1ULL << 63)"
-    update = "++(*depth);" if not is_return else "if (*depth) --(*depth);"
-    values = {
+class PHPEvents:
+    usdt = []
+    txt = []
+    probes = []
+
+    def probe(self, probe_name, func_name, read_class, read_method,
+              read_file, is_return=False):
+        "Generate the c for php probes"
+        depth = "*depth + 1" if not is_return else "*depth | (1ULL << 63)"
+        update = "++(*depth);" if not is_return else "if (*depth) --(*depth);"
+        values = {
             'name': func_name,
             'read_class': read_class,
             'read_method': read_method,
             'read_file': read_file,
             'depth': depth,
             'update_func': update
-            }
-    for pid in pids:
-        usdt = USDT(pid=pid)
-        usdt.enable_probe_or_bail(probe_name, func_name)
-        global USDT_TAB
-        USDT_TAB.append(usdt)
-    global PHP_TRACE_TEMPLATE
-    return PHP_TRACE_TEMPLATE.format(**values)
+        }
+        self.txt.append(PHP_TRACE_TEMPLATE.format(**values))
+        self.probes.append((probe_name, func_name))
 
-###############################################################################
+    def generate(self, pids):
+        for probe_name, func_name in self.probes:
+            for pid in pids:
+                usdt = USDT(pid=pid)
+                usdt.enable_probe_or_bail(probe_name, func_name)
+                self.usdt.append(usdt)
+        return "".join(self.txt)
 
 
 def c_program(pids):
     "Generate the C program"
-    global PROGRAM
-    program = PROGRAM
+    program = io.StringIO(PROGRAM)
 
-    program += generate_php_probe(pids,
-                                  "function__entry",
-                                  "php_entry",
-                                  "bpf_usdt_readarg(4, ctx, &clazz);",
-                                  "bpf_usdt_readarg(1, ctx, &method);",
-                                  "bpf_usdt_readarg(2, ctx, &file);",
-                                  is_return=False)
-    program += generate_php_probe(pids,
-                                  "function__return",
-                                  "php_return",
-                                  "bpf_usdt_readarg(4, ctx, &clazz);",
-                                  "bpf_usdt_readarg(1, ctx, &method);",
-                                  "bpf_usdt_readarg(2, ctx, &file);",
-                                  is_return=True)
+    php = PHPEvents()
 
+    php.probe(pids,
+              "function__entry",
+              "php_entry",
+              "bpf_usdt_readarg(4, ctx, &clazz);",
+              "bpf_usdt_readarg(1, ctx, &method);",
+              "bpf_usdt_readarg(2, ctx, &file);",
+              is_return=False)
+    php.probe(pids,
+              "function__return",
+              "php_return",
+              "bpf_usdt_readarg(4, ctx, &clazz);",
+              "bpf_usdt_readarg(1, ctx, &method);",
+              "bpf_usdt_readarg(2, ctx, &file);",
+              is_return=True)
+
+    program.write(php.generate(pids))
     # trace syscalls
-    global e
-    program += e.generate(pids)
-    return program
+
+    s = SyscallEvents()
+    # intercept when an open filedescriptor is read. get the fd for printing
+    # and get the type for sort the latence in NET or DISK
+    s.event(("read"), """
+                u64 fdarg = args->fd;
+                fd.update(&pid, &fdarg);
+
+                """, \
+                """
+                data.bytes_read = args->ret;
+                u64 *fdarg = fd.lookup(&pid);
+                if (fdarg) {
+                    data.fdr = *fdarg;
+                    fd.delete(&pid);
+                    u64 *fdt = filedescriptors.lookup(fdarg);
+                    if (fdt) {
+                        data.fd_type = *fdt;
+                    }
+                }
+
+                """)
+
+    # intercept when write on an open filedescriptor. get the fd for printing
+    # and get the type for sort the latence in NET or DISK
+    s.event(("write", "sendto", "sendmsg"), """
+                u64 fdarg = args->fd;
+                fd.update(&pid, &fdarg);
+
+                """, \
+                """
+                data.bytes_write = args->ret;
+                u64 *fdarg = fd.lookup(&pid);
+                if (fdarg) {
+                    data.fdw = *fdarg;
+                    fd.delete(&pid);
+                    u64 *fdt = filedescriptors.lookup(fdarg);
+                    if (fdt) {
+                        data.fd_type = *fdt;
+                    }
+                }
+
+                """)
+
+    # store in a map the filedescriptors when open or socket open it.
+    # and store the type: NET or DISK
+    s.event(("open", "openat", "creat"), "", """
+                u64 ret = args->ret;
+                u64 flag = DISK;
+                filedescriptors.update(&ret, &flag);
+                data.fd_ret = ret;
+
+                """)
+
+    s.event(("socket"), "", """
+                u64 ret = args->ret;
+                u64 flag = NET;
+                filedescriptors.update(&ret, &flag);
+                data.fd_ret = ret;
+
+                """)
+
+    # decorator for trace the address in the connect arg
+    s.event(("connect"), """
+                struct sockaddr_in *useraddr = ((struct sockaddr_in *)(args->uservaddr));
+                u64 a = useraddr->sin_addr.s_addr;
+                addr.update(&pid, &a);
+                u64 fdarg = args->fd;
+                fd.update(&pid, &fdarg);
+
+                """, \
+                """
+                u64 *a = addr.lookup(&pid);
+                if (a) {
+                    data.addr = *a;
+                    addr.delete(&pid);
+                }
+                u64 *fdarg = fd.lookup(&pid);
+                if (fdarg) {
+                    data.fdw = *fdarg;
+                    fd.delete(&pid);
+                }
+
+                """)
+
+    s.event(("bind"), """
+                struct sockaddr_in *useraddr = ((struct sockaddr_in *)(args->umyaddr));
+                u64 a = useraddr->sin_addr.s_addr;
+                addr.update(&pid, &a);
+                u64 fdarg = args->fd;
+                fd.update(&pid, &fdarg);
+
+                """, \
+                """
+                u64 *a = addr.lookup(&pid);
+                if (a) {
+                    data.addr = *a;
+                    addr.delete(&pid);
+                }
+                u64 *fdarg = fd.lookup(&pid);
+                if (fdarg) {
+                    data.fdw = *fdarg;
+                    fd.delete(&pid);
+                }
+
+                """)
+
+    program.write(s.generate(pids))
+    return program.getvalue()
 
 
 def main():
