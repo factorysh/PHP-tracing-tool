@@ -100,9 +100,9 @@ int {name}(struct pt_regs *ctx) {{
     {read_class}
     {read_method}
     {read_file}
-    bpf_probe_read_str(&data.clazz, sizeof(data.clazz), (void *)clazz);
-    bpf_probe_read_str(&data.method, sizeof(data.method), (void *)method);
-    bpf_probe_read_str(&data.file, sizeof(data.file), (void *)file);
+    bpf_probe_read(&data.clazz, sizeof(data.clazz), (void *)clazz);
+    bpf_probe_read(&data.method, sizeof(data.method), (void *)method);
+    bpf_probe_read(&data.file, sizeof(data.file), (void *)file);
     u64 id = clazz + method + file;
 
     data.type = FUNC;
@@ -157,7 +157,7 @@ TRACEPOINT_PROBE(syscalls, sys_exit_{syscall_name}) {{
     depth = entry.lookup_or_init(&data.pid, &zero);
     data.depth = *depth;
     char method_str[80] = "{syscall_name}";
-    bpf_probe_read_str(&data.method, sizeof(data.method), method_str);
+    bpf_probe_read(&data.method, sizeof(data.method), method_str);
 
     u64 *start_ns = start.lookup(&pid);
     if (!start_ns) {{
