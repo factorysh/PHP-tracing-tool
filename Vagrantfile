@@ -5,7 +5,7 @@ Vagrant.configure("2") do |config|
     v.memory = 1024
   end
   config.vm.synced_folder ".", "/vagrant", disabled: true
-  config.vm.synced_folder "./", "/vagrant/php_tool/"
+  config.vm.synced_folder "./", "/vagrant/php_tool/", owner: "vagrant", group: "vagrant", type: "rsync"
   config.vm.provision "shell", inline: <<-SHELL
   sudo su
   apt-get update -y
@@ -19,6 +19,7 @@ Vagrant.configure("2") do |config|
     ca-certificates \
     curl \
     gnupg2 \
+    git \
     software-properties-common
 
   curl -fsSL https://download.docker.com/linux/debian/gpg | sudo apt-key add -
