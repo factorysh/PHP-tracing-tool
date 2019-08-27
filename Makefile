@@ -17,3 +17,11 @@ demo-wordpress: wordpress-debug-image
 
 vagrant:
 	vagrant up
+
+src/bcc:
+	mkdir -p src
+	cd src && git clone https://github.com/iovisor/bcc.git
+
+build-bcc: src/bcc
+	docker build -t bcc-debian -f src/bcc/Dockerfile.debian .
+	docker run -v `pwd`/debs:/debs bcc-debian sh -c "mv *.deb /debs"
