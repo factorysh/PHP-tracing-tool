@@ -1,4 +1,4 @@
-#! /usr/bin/env python
+#!/usr/bin/env python
 
 from __future__ import print_function
 from bcc import BPF, USDT
@@ -429,7 +429,7 @@ class Callback:
                     if self.total_lat > 0:
                         print_event(
                                 event.pid >> 32,
-                                total_lat,
+                                self.total_lat,
                                 BLUE + "traced syscalls total latence" + ENDC,
                                 depth
                         )
