@@ -23,5 +23,5 @@ src/bcc:
 	cd src && git clone https://github.com/iovisor/bcc.git
 
 build-bcc: src/bcc
-	docker build -t bcc-debian -f src/bcc/Dockerfile.debian .
+	docker build -t bcc-debian -f src/bcc/Dockerfile.debian src/bcc
 	docker run -v `pwd`/debs:/debs bcc-debian sh -c "mv *.deb /debs"
