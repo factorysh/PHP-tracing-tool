@@ -5,7 +5,7 @@ Vagrant.configure("2") do |config|
     v.memory = 1024
   end
   config.vm.synced_folder ".", "/vagrant", disabled: true
-  config.vm.synced_folder "./", "/vagrant/php_tool/", owner: "vagrant", group: "vagrant", type: "rsync"
+  config.vm.synced_folder "./", "/vagrant/php_tool/", owner: "vagrant", group: "vagrant"
   config.vm.provision "shell", inline: <<-SHELL
   sudo su
   apt-get update -y

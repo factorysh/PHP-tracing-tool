@@ -24,7 +24,7 @@ src/bcc:
 
 build-bcc: src/bcc
 	docker build -t bcc-debian -f src/bcc/Dockerfile.debian src/bcc
-	docker run -v `pwd`/debs:/debs bcc-debian sh -c "mv *.deb /debs"
+	docker run -v `pwd`/debs:/debs bcc-debian sh -c "cp *.deb /debs"
 
 debs: build-bcc
 
