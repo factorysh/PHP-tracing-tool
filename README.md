@@ -1,11 +1,19 @@
 ## Vagrant Demo Instructions
 
-git clone https://github.com/iovisor/bcc.git
+Setup the vagrant machine
 
-cd bcc
+	make vagrant
 
-docker build -t bcc-debian -f Dockerfile.debian .
+Go in the machine
 
-docker run -v `pwd`/debs:/debs bcc-debian sh -c "mv *.deb /debs"
+	vagrant ssh
 
-vagrant up
+Install BCC and all the components
+
+	make install-bcc
+
+Launch the demo!
+
+	make
+
+

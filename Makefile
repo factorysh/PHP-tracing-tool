@@ -1,10 +1,10 @@
-.PHONY: demo-php-app demo-wordpress php-debug-image wordpress-debug-image
+.PHONY: demo-php-app demo-wordpress php-debug-image wordpress-debug-image vagrant src/bcc install-bcc
 
 all: demo-php-app
 	make -C demo-php-app up
 
 php-debug-image:
-	make -C php-debug-image
+	make -C php-debug-image-stretch
 
 wordpress-debug-image: php-debug-image
 	make -C wordpress-debug-image
