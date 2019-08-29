@@ -1,5 +1,7 @@
 .PHONY: demo-php-app demo-wordpress php-debug-image wordpress-debug-image vagrant src/bcc install-bcc
 
+BCC_VERSION=v0.10.0
+
 all: demo-php-app
 	make -C demo-php-app up
 
@@ -20,7 +22,7 @@ vagrant:
 
 src/bcc:
 	mkdir -p src
-	cd src && git clone https://github.com/iovisor/bcc.git
+	cd src && git clone -b ${BCC_VERSION} https://github.com/iovisor/bcc.git
 
 build-bcc: src/bcc
 	docker build -t bcc-debian -f src/bcc/Dockerfile.debian src/bcc
@@ -28,9 +30,9 @@ build-bcc: src/bcc
 
 debs: build-bcc
 
-install-bcc-local: src/bcc
+install-bcc-manually: src/bcc
 	mkdir -p src/bcc/build
 	cd src/bcc/build && sudo cmake .. -DCMAKE_INSTALL_PREFIX=/usr && sudo make && sudo make install
 
-install-bcc: debs
+install-bcc-with-debs: debs
 	sudo dpkg -i debs/*.deb

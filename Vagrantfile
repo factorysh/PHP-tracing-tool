@@ -2,7 +2,7 @@
 # vi: set ft=ruby :
 
 Vagrant.configure("2") do |config|
-  config.vm.box = "debian/stretch64"
+  config.vm.box = "debian/buster64"
   config.vm.network "private_network", ip: "192.168.33.10"
   config.vm.provider "virtualbox" do |v|
     v.memory = 1024
@@ -17,6 +17,9 @@ Vagrant.configure("2") do |config|
     python3 \
     python-pip \
     python3-pip \
+    python3-bpfcc \
+    python-bpfcc \
+    bpfcc-tools \
     sysvinit-utils \
     apt-transport-https \
     ca-certificates \
@@ -31,10 +34,8 @@ Vagrant.configure("2") do |config|
   apt-get install -y --no-install-recommends \
     docker-ce \
     docker-ce-cli \
+    docker-compose \
     containerd.io
-
-  curl --silent -L https://github.com/docker/compose/releases/download/1.25.0-rc2/docker-compose-`uname -s`-`uname -m` -o /usr/local/bin/docker-compose
-  chmod +x /usr/local/bin/docker-compose
 
   usermod -aG docker vagrant
   docker info

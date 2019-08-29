@@ -1,33 +1,19 @@
 ## Vagrant Demo Instructions
 
-Setup the vagrant machine
-
-	make vagrant
-
-Go in the machine
-
-	vagrant ssh
-
-Install BCC and all the components
-
-	make install-bcc
-
-Launch the demo!
-
-	make
-
-## TEST FIX
-
-Setup vagrant buster
+Setup the vagrant machine and go in
 
 	cd vagrant-buster && vagrant up
 	vagrant ssh
-
-Install BCC
-
 	cd /vagrant/php_tool
-	make install-bcc-local
 
-Demo
+Launch the demo PHP and nginx containers
 
 	make
+
+Instrumenting the code with php_tool
+
+	sudo ./php_tool.py PID [PID ...]
+
+Usage
+
+	sudo ./php_tool.py
