@@ -28,5 +28,9 @@ build-bcc: src/bcc
 
 debs: build-bcc
 
+install-bcc-local: src/bcc
+	mkdir -p src/bcc/build
+	cd src/bcc/build && sudo cmake .. -DCMAKE_INSTALL_PREFIX=/usr && sudo make && sudo make install
+
 install-bcc: debs
 	sudo dpkg -i debs/*.deb
