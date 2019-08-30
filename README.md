@@ -30,7 +30,7 @@ Be sure to have BCC on your machine
 
 Execute the script
 
-	sudo ./php_tool -h
+	sudo ./php_tool.py -h
 
 ## Complete Demo
 
