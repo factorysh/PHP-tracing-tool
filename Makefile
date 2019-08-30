@@ -15,6 +15,11 @@ demo-php-app: php-debug-image
 	make -C demo-php-app
 
 demo-wordpress: wordpress-debug-image
+	curl -O https://raw.githubusercontent.com/wp-cli/builds/gh-pages/phar/wp-cli.phar
+	chmod +x wp-cli.phar
+	sudo mv wp-cli.phar /usr/local/bin/wp
+	wp --info
+	wp core download --force --path=demo-wordpress/wordpress --version=latest
 	make -C demo-wordpress
 
 vagrant:
