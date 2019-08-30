@@ -6,7 +6,7 @@ Built to help you understand your program behavior in a "normal" environment, di
 
 It gives a deep observability of the application without add specific php debugging code : function execution flow with latency of each function, tracing I/O syscalls with details...
 
-You can also **monitor your containerized application**, it discuss directly with the kernel (eBPF), there is **no impact on your application**. You just need a PHP compiled with the --enable-dtrace debug option (the image is in the repo)
+You can also **monitor your containerized application** because it works on the PID of the php process, it discuss directly with the kernel (eBPF), there is **no impact on your application**. You just need a PHP compiled with the --enable-dtrace debug option (the image is in the repo)
 
 ![screenshot](assets/screenshot1.png)
 
