@@ -15,6 +15,7 @@ Vagrant.configure("2") do |config|
   apt-get install -y --no-install-recommends \
     python \
     python3 \
+    php \
     python-pip \
     python3-pip \
     python3-bpfcc \
