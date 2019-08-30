@@ -2,7 +2,7 @@
 
 PHP tracing tool is a command line tool written in python - based on the [BCC toolkit](https://github.com/iovisor/bcc) (eBPF) - for PHP code monitoring.
 
-Built to help you understand your program.
+Built to help you understand your program behavior in a "normal" environment, directly in production.
 
 It gives a deep observability of the application without add specific php debugging code : function execution flow with latency of each function, tracing I/O syscalls with details...
 
