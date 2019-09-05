@@ -259,6 +259,8 @@ class Callback:
     def __call__(self, cpu, data, size):
         event = ct.cast(data, ct.POINTER(CallEvent)).contents
         depth = event.depth & (~(1 << 63))
+        if depth == 0:
+            return
         if event.type == SYSCALL:
             self.total_lat += event.lat
 
