@@ -204,7 +204,7 @@ class SyscallEvents:
 
 def print_event(pid, lat, message, depth):
     return ("%-6d %-10s %-40s" %
-          (pid, str(lat), (PADDING * (depth - 1)) + message))
+            (pid, str(lat), (PADDING * (depth - 1)) + message))
 
 
 def syscall_message(event):
@@ -232,7 +232,6 @@ def syscall_message(event):
             pass
     return message.getvalue()
 
-# callback function for open_perf_buffer
 
 class Process:
     total_lat = 0
@@ -259,7 +258,7 @@ class Process:
         self.data_buffer.write(data + '\n')
 
     def get_buffer(self):
-	    return self.data_buffer.getvalue()
+        return self.data_buffer.getvalue()
 
 
 class Callback:
@@ -320,16 +319,18 @@ class Callback:
                         ))
 
                     if process.total_net_time > 0:
-                        process.add_in_buffer(print_event(
-                            event.pid >> 32, process.total_net_time, BLUE + (
-                                "sys time spent on the network |-> %d bytes written, %d bytes read" %
-                                (process.net_write_volume, process.net_read_volume)) + ENDC, depth))
+                        process.add_in_buffer(
+                            print_event(
+                                event.pid >> 32, process.total_net_time, BLUE + (
+                                    "sys time spent on the network |-> %d bytes written, %d bytes read" %
+                                    (process.net_write_volume, process.net_read_volume)) + ENDC, depth))
 
                     if process.total_disk_time > 0:
-                        process.add_in_buffer(print_event(
-                            event.pid >> 32, process.total_disk_time, BLUE + (
-                                "sys time spent on the disk |-> %d bytes written, %d bytes read" %
-                                (process.disk_write_volume, process.disk_read_volume)) + ENDC, depth))
+                        process.add_in_buffer(
+                            print_event(
+                                event.pid >> 32, process.total_disk_time, BLUE + (
+                                    "sys time spent on the disk |-> %d bytes written, %d bytes read" %
+                                    (process.disk_write_volume, process.disk_read_volume)) + ENDC, depth))
 
                     # reset counters
                     process.reset()
@@ -337,15 +338,33 @@ class Callback:
             else:
                 direction = "-> "
 
-            process.add_in_buffer(print_event(event.pid >> 32,
-                        str(event.lat) if event.lat > 0 else "-",
-                        "".join((direction,
-                                 event.clazz.decode('utf-8', 'replace'),
-                                 ".", event.method.decode('utf-8', 'replace'),
-                                 " ", UNDERLINE, "from ",  event.file.decode('utf-8', 'replace'), ENDC)),
-                        depth))
+            process.add_in_buffer(
+                print_event(
+                    event.pid >> 32,
+                    str(
+                        event.lat) if event.lat > 0 else "-",
+                    "".join(
+                        (direction,
+                         event.clazz.decode(
+                             'utf-8',
+                             'replace'),
+                            ".",
+                            event.method.decode(
+                             'utf-8',
+                             'replace'),
+                            " ",
+                            UNDERLINE,
+                            "from ",
+                            event.file.decode(
+                            'utf-8',
+                            'replace'),
+                            ENDC)),
+                    depth))
             # Quit the program on the last main return
-            if event.depth & (1 << 63) and event.method.decode('utf-8', 'replace') == "main" and depth == 1:
+            if event.depth & (
+                    1 << 63) and event.method.decode(
+                    'utf-8',
+                    'replace') == "main" and depth == 1:
                 print(process.get_buffer())
                 del self.process_dict[str(event.pid)]
                 if not self.process_dict:
@@ -413,8 +432,8 @@ def c_program(pids):
                 u64 fdarg = args->fd;
                 fd.update(&pid, &fdarg);
 
-                """, \
-                """
+                """,
+            """
                 data.bytes_read = args->ret;
                 u64 *fdarg = fd.lookup(&pid);
                 if (fdarg) {
@@ -434,8 +453,8 @@ def c_program(pids):
                 u64 fdarg = args->fd;
                 fd.update(&pid, &fdarg);
 
-                """, \
-                """
+                """,
+            """
                 data.bytes_write = args->ret;
                 u64 *fdarg = fd.lookup(&pid);
                 if (fdarg) {
@@ -475,8 +494,8 @@ def c_program(pids):
                 u64 fdarg = args->fd;
                 fd.update(&pid, &fdarg);
 
-                """, \
-                """
+                """,
+            """
                 u64 *a = addr.lookup(&pid);
                 if (a) {
                     data.addr = *a;
@@ -497,8 +516,8 @@ def c_program(pids):
                 u64 fdarg = args->fd;
                 fd.update(&pid, &fdarg);
 
-                """, \
-                """
+                """,
+            """
                 u64 *a = addr.lookup(&pid);
                 if (a) {
                     data.addr = *a;
