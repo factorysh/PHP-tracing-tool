@@ -262,7 +262,7 @@ class Process:
 
 
 class Callback:
-    process_dict = {}
+    process_dict = defaultdict(Process)
 
     def __init__(self, args):
         self.args = args
@@ -272,8 +272,6 @@ class Callback:
         depth = event.depth & (~(1 << 63))
         if depth == 0:
             return
-        if not str(event.pid) in self.process_dict:
-             self.process_dict[str(event.pid)] = Process()
         process = self.process_dict[str(event.pid)]
         if event.type == SYSCALL:
             process.total_lat += event.lat
