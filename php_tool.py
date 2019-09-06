@@ -203,8 +203,8 @@ class SyscallEvents:
 
 
 def print_event(pid, lat, message, depth):
-    print("%-6d %-10s %-40s" %
-          (pid, str(lat), (PADDING * (depth - 1)) + message))
+    return ("%-6d %-10s %-40s" %
+            (pid, str(lat), (PADDING * (depth - 1)) + message))
 
 
 def syscall_message(event):
@@ -232,10 +232,8 @@ def syscall_message(event):
             pass
     return message.getvalue()
 
-# callback function for open_perf_buffer
 
-
-class Callback:
+class Process:
     total_lat = 0
     total_net_time = 0
     total_disk_time = 0
@@ -244,8 +242,8 @@ class Callback:
     net_read_volume = 0
     disk_read_volume = 0
 
-    def __init__(self, args):
-        self.args = args
+    def __init__(self):
+        self.data_buffer = io.StringIO()
 
     def reset(self):
         self.total_lat = 0
@@ -256,39 +254,53 @@ class Callback:
         self.net_read_volume = 0
         self.disk_read_volume = 0
 
+    def add_in_buffer(self, data):
+        self.data_buffer.write(data + '\n')
+
+    def get_buffer(self):
+        return self.data_buffer.getvalue()
+
+
+class Callback:
+    process_dict = defaultdict(Process)
+
+    def __init__(self, args):
+        self.args = args
+
     def __call__(self, cpu, data, size):
         event = ct.cast(data, ct.POINTER(CallEvent)).contents
         depth = event.depth & (~(1 << 63))
         if depth == 0:
             return
+        process = self.process_dict[str(event.pid)]
         if event.type == SYSCALL:
-            self.total_lat += event.lat
+            process.total_lat += event.lat
 
             if event.fd_type == NET:
-                self.total_net_time += event.lat
+                process.total_net_time += event.lat
 
                 if event.bytes_write > 0:
-                    self.net_write_volume += event.bytes_write
+                    process.net_write_volume += event.bytes_write
                 elif event.bytes_read > 0:
-                    self.net_read_volume += event.bytes_read
+                    process.net_read_volume += event.bytes_read
 
             elif event.fd_type == DISK:
-                self.total_disk_time += event.lat
+                process.total_disk_time += event.lat
 
                 if event.bytes_write > 0:
-                    self.disk_write_volume += event.bytes_write
+                    process.disk_write_volume += event.bytes_write
                 elif event.bytes_read > 0:
-                    self.disk_read_volume += event.bytes_read
+                    process.disk_read_volume += event.bytes_read
 
             if not self.args.syscalls:
                 return
 
-            print_event(
+            process.add_in_buffer(print_event(
                 event.pid >> 32,
                 event.lat,
                 syscall_message(event),
                 depth
-            )
+            ))
 
         else:
             # Return function case
@@ -296,42 +308,65 @@ class Callback:
                 direction = "<- "
 
                 if SYSCALLS:
-                    if self.total_lat > 0:
-                        print_event(
+                    if process.total_lat > 0:
+                        process.add_in_buffer(print_event(
                                 event.pid >> 32,
-                                self.total_lat,
+                                process.total_lat,
                                 BLUE + "traced syscalls total latence" + ENDC,
                                 depth
-                        )
+                        ))
 
-                    if self.total_net_time > 0:
-                        print_event(
-                            event.pid >> 32, self.total_net_time, BLUE + (
-                                "sys time spent on the network |-> %d bytes written, %d bytes read" %
-                                (self.net_write_volume, self.net_read_volume)) + ENDC, depth)
+                    if process.total_net_time > 0:
+                        process.add_in_buffer(
+                            print_event(
+                                event.pid >> 32, process.total_net_time, BLUE + (
+                                    "sys time spent on the network |-> %d bytes written, %d bytes read" %
+                                    (process.net_write_volume, process.net_read_volume)) + ENDC, depth))
 
-                    if self.total_disk_time > 0:
-                        print_event(
-                            event.pid >> 32, self.total_disk_time, BLUE + (
-                                "sys time spent on the disk |-> %d bytes written, %d bytes read" %
-                                (self.disk_write_volume, self.disk_read_volume)) + ENDC, depth)
+                    if process.total_disk_time > 0:
+                        process.add_in_buffer(
+                            print_event(
+                                event.pid >> 32, process.total_disk_time, BLUE + (
+                                    "sys time spent on the disk |-> %d bytes written, %d bytes read" %
+                                    (process.disk_write_volume, process.disk_read_volume)) + ENDC, depth))
 
                     # reset counters
-                    self.reset()
+                    process.reset()
             # Entry function case
             else:
                 direction = "-> "
 
-            print_event(event.pid >> 32,
-                        str(event.lat) if event.lat > 0 else "-",
-                        "".join((direction,
-                                 event.clazz.decode('utf-8', 'replace'),
-                                 ".", event.method.decode('utf-8', 'replace'),
-                                 " ", UNDERLINE, "from ",  event.file.decode('utf-8', 'replace'), ENDC)),
-                        depth)
+            process.add_in_buffer(
+                print_event(
+                    event.pid >> 32,
+                    str(
+                        event.lat) if event.lat > 0 else "-",
+                    "".join(
+                        (direction,
+                         event.clazz.decode(
+                             'utf-8',
+                             'replace'),
+                            ".",
+                            event.method.decode(
+                             'utf-8',
+                             'replace'),
+                            " ",
+                            UNDERLINE,
+                            "from ",
+                            event.file.decode(
+                            'utf-8',
+                            'replace'),
+                            ENDC)),
+                    depth))
             # Quit the program on the last main return
-            if event.depth & (1 << 63) and event.method.decode('utf-8', 'replace') == "main" and depth == 1:
-                exit()
+            if event.depth & (
+                    1 << 63) and event.method.decode(
+                    'utf-8',
+                    'replace') == "main" and depth == 1:
+                print(process.get_buffer())
+                del self.process_dict[str(event.pid)]
+                if not self.process_dict:
+                    exit()
 
 
 class PHPEvents:
@@ -395,8 +430,8 @@ def c_program(pids):
                 u64 fdarg = args->fd;
                 fd.update(&pid, &fdarg);
 
-                """, \
-                """
+                """,
+            """
                 data.bytes_read = args->ret;
                 u64 *fdarg = fd.lookup(&pid);
                 if (fdarg) {
@@ -416,8 +451,8 @@ def c_program(pids):
                 u64 fdarg = args->fd;
                 fd.update(&pid, &fdarg);
 
-                """, \
-                """
+                """,
+            """
                 data.bytes_write = args->ret;
                 u64 *fdarg = fd.lookup(&pid);
                 if (fdarg) {
@@ -457,8 +492,8 @@ def c_program(pids):
                 u64 fdarg = args->fd;
                 fd.update(&pid, &fdarg);
 
-                """, \
-                """
+                """,
+            """
                 u64 *a = addr.lookup(&pid);
                 if (a) {
                     data.addr = *a;
@@ -479,8 +514,8 @@ def c_program(pids):
                 u64 fdarg = args->fd;
                 fd.update(&pid, &fdarg);
 
-                """, \
-                """
+                """,
+            """
                 u64 *a = addr.lookup(&pid);
                 if (a) {
                     data.addr = *a;
