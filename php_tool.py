@@ -261,8 +261,13 @@ class Process:
         return self.data_buffer.getvalue()
 
 
+class EndOfMain(Exception):
+    pass
+
+
 class Callback:
     process_dict = defaultdict(Process)
+    closed_mains = []
 
     def __init__(self, args):
         self.args = args
@@ -363,10 +368,10 @@ class Callback:
                     1 << 63) and event.method.decode(
                     'utf-8',
                     'replace') == "main" and depth == 1:
-                print(process.get_buffer())
+                self.closed_mains.append(process)
                 del self.process_dict[str(event.pid)]
                 if not self.process_dict:
-                    exit()
+                    raise EndOfMain()
 
 
 class PHPEvents:
@@ -568,11 +573,16 @@ def main():
     print("php super tool, pid = %s... Ctrl-C to quit." % (args.pid))
     print("%-6s %-10s %s" % ("PID", "LAT", "METHOD"))
 
+    cb = Callback(args)
     # don't forget the page_cnt option for increase the ring buffer size
-    bpf["calls"].open_perf_buffer(Callback(args), page_cnt=8192)
+    bpf["calls"].open_perf_buffer(cb, page_cnt=8192)
     while True:
         try:
             bpf.perf_buffer_poll()
+        except EndOfMain:
+            for p in cb.closed_mains:
+                print(p.get_buffer())
+            exit()
         except KeyboardInterrupt:
             exit()
 
