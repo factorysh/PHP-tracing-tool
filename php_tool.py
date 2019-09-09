@@ -12,13 +12,11 @@ import socket
 from collections import defaultdict
 
 # globals
-
 SYSCALLS = ["socket", "socketpair", "bind", "listen", "accept", "accept4",
             "connect", "getsockname", "getpeername", "sendto", "recvfrom",
             "setsockopt", "getsockopt", "shutdown", "sendmsg", "sendmmsg",
             "recvmsg", "recvmmsg", "read", "write", "open", "openat", "creat",
             "close", "sendfile64"]
-#syscalls = []
 
 SYSCALL = 1
 DISK = 3
@@ -29,7 +27,6 @@ UNDERLINE = '\033[4m'
 ENDC = '\033[0m'
 
 # C result class
-
 
 class CallEvent(ct.Structure):
     _fields_ = [
